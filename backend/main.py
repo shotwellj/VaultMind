@@ -476,13 +476,37 @@ async def ingest_url(data: UrlIngest):
 
 @app.get("/files")
 async def list_files(workspace: str = Query(default="Default")):  # workspace kept for compat
-    col     = get_collection()
-    results = col.get(include=["metadatas"])
-    files   = {}
-    for meta in results["metadatas"]:
-        src = meta["source"]
+    col          = get_collection()
+    results      = col.get(include=["metadatas", "documents"])
+    files        = {}    # source → chunk count
+    first_chunks = {}    # source → first chunk text
+
+    for meta, doc in zip(results["metadatas"], results["documents"]):
+        src       = meta["source"]
+        chunk_idx = meta.get("chunk", 0)
         files[src] = files.get(src, 0) + 1
-    return {"files": [{"name": k, "chunks": v} for k, v in files.items()]}
+        if chunk_idx == 0:
+            first_chunks[src] = doc
+
+    items = []
+    for src, count in files.items():
+        title = None
+        first = first_chunks.get(src, "")
+        if src.startswith("gmail:") and first:
+            # First chunk starts with "From: ...\nDate: ...\nSubject: ..."
+            for line in first.split("\n"):
+                if line.lower().startswith("subject:"):
+                    title = line[8:].strip() or None
+                    break
+        elif src.startswith("notion:") and first:
+            # Notion content — use first non-empty line as title
+            for line in first.split("\n"):
+                if line.strip():
+                    title = line.strip()[:80]
+                    break
+        items.append({"name": src, "title": title, "chunks": count})
+
+    return {"files": items}
 
 @app.delete("/files/{filename}")
 async def delete_file(filename: str, workspace: str = Query(default="Default")):

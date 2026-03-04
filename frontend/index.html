@@ -279,6 +279,16 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
         <div class="section-header"><span class="section-label">Web Sources</span><span class="section-count" id="web-count">0</span></div>
         <div id="web-list"><div class="section-empty" id="web-empty">No URLs indexed yet</div></div>
       </div>
+      <div class="section-divider" id="emails-divider" style="display:none"></div>
+      <div id="emails-section" style="display:none">
+        <div class="section-header"><span class="section-label">Emails</span><span class="section-count" id="emails-count">0</span></div>
+        <div id="emails-list"></div>
+      </div>
+      <div class="section-divider" id="notion-divider" style="display:none"></div>
+      <div id="notion-section" style="display:none">
+        <div class="section-header"><span class="section-label">Notion Pages</span><span class="section-count" id="notion-count">0</span></div>
+        <div id="notion-list"></div>
+      </div>
     </div>
     <div class="sidebar-footer">
       <div class="setting-row">
@@ -431,6 +441,8 @@ let busy         = false;
 let agentMode    = false;
 let docCount     = 0;
 let webCount     = 0;
+let emailCount   = 0;
+let notionCount  = 0;
 
 // ── DOM ───────────────────────────────────────────────────────
 const sidebar        = document.querySelector('.sidebar');
@@ -523,6 +535,7 @@ async function syncNotion() {
       sts.textContent = `✅ ${d.message}`;
       toast(`✅ ${d.message}`);
       ping();
+      if (d.synced > 0) { clearFilesList(); loadFiles(); }
     }
   } catch { sts.textContent = '❌ Sync failed'; toast('❌ Sync failed', true); }
   btn.disabled = false;
@@ -530,11 +543,19 @@ async function syncNotion() {
 
 // ── Workspace ─────────────────────────────────────────────────
 function clearFilesList() {
-  docCount = 0; webCount = 0;
-  document.getElementById('docs-count').textContent = '0';
-  document.getElementById('web-count').textContent  = '0';
-  document.getElementById('docs-list').innerHTML = '<div class="section-empty" id="docs-empty">No documents indexed yet</div>';
-  document.getElementById('web-list').innerHTML  = '<div class="section-empty" id="web-empty">No URLs indexed yet</div>';
+  docCount = 0; webCount = 0; emailCount = 0; notionCount = 0;
+  document.getElementById('docs-count').textContent   = '0';
+  document.getElementById('web-count').textContent    = '0';
+  document.getElementById('emails-count').textContent = '0';
+  document.getElementById('notion-count').textContent = '0';
+  document.getElementById('docs-list').innerHTML   = '<div class="section-empty" id="docs-empty">No documents indexed yet</div>';
+  document.getElementById('web-list').innerHTML    = '<div class="section-empty" id="web-empty">No URLs indexed yet</div>';
+  document.getElementById('emails-list').innerHTML = '';
+  document.getElementById('notion-list').innerHTML = '';
+  document.getElementById('emails-section').style.display = 'none';
+  document.getElementById('emails-divider').style.display = 'none';
+  document.getElementById('notion-section').style.display = 'none';
+  document.getElementById('notion-divider').style.display = 'none';
 }
 
 // ── Model ─────────────────────────────────────────────────────
@@ -602,7 +623,7 @@ async function ping() {
 async function loadFiles() {
   try {
     const d = await fetch(`${API}/files`).then(r => r.json());
-    d.files.forEach(f => addFileCard(f.name, f.chunks));
+    d.files.forEach(f => addFileCard(f.name, f.chunks, f.title));
   } catch {}
 }
 
@@ -643,30 +664,74 @@ async function ingest(files) {
 }
 
 // ── File cards ────────────────────────────────────────────────
-function isWebSource(n) { return n.startsWith('🌐') || n.startsWith('http://') || n.startsWith('https://'); }
+function isWebSource(n)    { return n.startsWith('🌐') || n.startsWith('http://') || n.startsWith('https://'); }
+function isEmailSource(n)  { return n.startsWith('gmail:'); }
+function isNotionSource(n) { return n.startsWith('notion:'); }
+
 function fileIcon(n) {
-  if (isWebSource(n)) return '🌐';
+  if (isEmailSource(n))  return '📧';
+  if (isNotionSource(n)) return '📓';
+  if (isWebSource(n))    return '🌐';
   const ext = n.split('.').pop()?.toLowerCase();
   return {pdf:'📄',docx:'📝',txt:'📝',md:'📝',csv:'📊'}[ext] || '📄';
 }
-function friendlyName(n) {
+
+function friendlyName(n, title) {
+  if (title) return title;
+  if (isEmailSource(n))  return 'Email ' + n.slice(-8);
+  if (isNotionSource(n)) return 'Notion page ' + n.slice(-8);
   if (n.startsWith('🌐')) return n.slice(2).trim();
   try { const u = new URL(n); return u.hostname + (u.pathname !== '/' ? u.pathname : ''); } catch {}
   return n;
 }
+
+// Convert raw source IDs to readable labels for chat attribution
+function sourceLabel(src) {
+  if (isEmailSource(src))  return '📧 Email';
+  if (isNotionSource(src)) return '📓 Notion';
+  if (src.startsWith('🌐')) return '🌐 ' + src.slice(2, 42).trim();
+  try { return new URL(src).hostname; } catch {}
+  return src.length > 40 ? src.slice(0, 40) + '…' : src;
+}
+
 function updateCount(s, c) { document.getElementById(s+'-count').textContent = c; }
 
-function addFileCard(name, chunks) {
-  const safeId = 'fc-' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'');
+function sectionFor(name) {
+  if (isEmailSource(name))  return 'emails';
+  if (isNotionSource(name)) return 'notion';
+  if (isWebSource(name))    return 'web';
+  return 'docs';
+}
+
+function addFileCard(name, chunks, title) {
+  const safeId  = 'fc-' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'');
   if (document.getElementById(safeId)) return;
-  const isWeb  = isWebSource(name);
-  const listEl = document.getElementById(isWeb ? 'web-list' : 'docs-list');
-  const emEl   = document.getElementById(isWeb ? 'web-empty' : 'docs-empty');
+  const section = sectionFor(name);
+  const listEl  = document.getElementById(section + '-list');
+  const emEl    = document.getElementById(section + '-empty');
   if (emEl) emEl.remove();
-  if (isWeb) { webCount++; updateCount('web', webCount); } else { docCount++; updateCount('docs', docCount); }
+
+  // Show connector sections on first item
+  if (section === 'emails') {
+    emailCount++;
+    updateCount('emails', emailCount);
+    document.getElementById('emails-section').style.display = '';
+    document.getElementById('emails-divider').style.display = '';
+  } else if (section === 'notion') {
+    notionCount++;
+    updateCount('notion', notionCount);
+    document.getElementById('notion-section').style.display = '';
+    document.getElementById('notion-divider').style.display = '';
+  } else if (section === 'web') {
+    webCount++; updateCount('web', webCount);
+  } else {
+    docCount++; updateCount('docs', docCount);
+  }
+
+  const label = friendlyName(name, title);
   const el = document.createElement('div');
   el.className = 'file-card'; el.id = safeId;
-  el.innerHTML = `<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${friendlyName(name)}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${isWeb?'web':'docs'}')">×</button>`;
+  el.innerHTML = `<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${label}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${section}')">×</button>`;
   listEl.appendChild(el);
 }
 
@@ -677,8 +742,19 @@ async function deleteFile(enc, safeId, section) {
     const d = await fetch(`${API}/files/${enc}`, {method:'DELETE'}).then(r => r.json());
     if (d.error) throw new Error(d.error);
     document.getElementById(safeId)?.remove();
-    if (section === 'web') { webCount = Math.max(0,webCount-1); updateCount('web',webCount); if (!webCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='web-empty'; e.textContent='No URLs indexed yet'; document.getElementById('web-list').appendChild(e); } }
-    else { docCount = Math.max(0,docCount-1); updateCount('docs',docCount); if (!docCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='docs-empty'; e.textContent='No documents indexed yet'; document.getElementById('docs-list').appendChild(e); } }
+    if (section === 'web') {
+      webCount = Math.max(0,webCount-1); updateCount('web',webCount);
+      if (!webCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='web-empty'; e.textContent='No URLs indexed yet'; document.getElementById('web-list').appendChild(e); }
+    } else if (section === 'emails') {
+      emailCount = Math.max(0,emailCount-1); updateCount('emails',emailCount);
+      if (!emailCount) { document.getElementById('emails-section').style.display='none'; document.getElementById('emails-divider').style.display='none'; }
+    } else if (section === 'notion') {
+      notionCount = Math.max(0,notionCount-1); updateCount('notion',notionCount);
+      if (!notionCount) { document.getElementById('notion-section').style.display='none'; document.getElementById('notion-divider').style.display='none'; }
+    } else {
+      docCount = Math.max(0,docCount-1); updateCount('docs',docCount);
+      if (!docCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='docs-empty'; e.textContent='No documents indexed yet'; document.getElementById('docs-list').appendChild(e); }
+    }
     toast('🗑️ Removed'); ping();
   } catch(e) { toast(`❌ ${e.message}`, true); }
 }
@@ -767,7 +843,10 @@ async function syncGmail() {
   try {
     const d = await fetch(`${API}/connectors/gmail/sync`, {method:'POST'}).then(r => r.json());
     if (d.error) { sts.textContent = `❌ ${d.error}`; toast(`❌ ${d.error}`, true); }
-    else { sts.textContent = `✅ ${d.message}`; toast(`✅ ${d.message}`); ping(); }
+    else {
+      sts.textContent = `✅ ${d.message}`; toast(`✅ ${d.message}`); ping();
+      if (d.synced > 0) { clearFilesList(); loadFiles(); }
+    }
   } catch { sts.textContent = '❌ Sync failed'; toast('❌ Sync failed', true); }
   btn.disabled = false;
 }
@@ -845,7 +924,7 @@ async function ask() {
           if (data.token) { if (statusEl) { statusEl.remove(); statusEl=null; } fullText += data.token; bubble.textContent = stripMarkdown(fullText); bubble.appendChild(cursor); msgsEl.scrollTop = msgsEl.scrollHeight; }
           if (data.done) {
             cursor.remove();
-            if (data.sources?.length) { const s=document.createElement('div'); s.className='src'; s.textContent='Sources: '+data.sources.join(', '); botEl.appendChild(s); }
+            if (data.sources?.length) { const s=document.createElement('div'); s.className='src'; s.textContent='Sources: '+[...new Set(data.sources.map(sourceLabel))].join(', '); botEl.appendChild(s); }
             history.push({role:'user',content:text}); history.push({role:'assistant',content:fullText});
             if (history.length > 12) history = history.slice(-12);
           }
