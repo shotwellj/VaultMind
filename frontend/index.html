@@ -11,506 +11,278 @@
 <link rel="manifest" href="/manifest.json">
 <title>VaultMind</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f0f;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f0f;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
-  /* ── Header ── */
-  header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-items:center;gap:12px;flex-shrink:0;background:#0f0f0f}
-  .logo{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}.logo span{color:#6366f1}
-  .tagline{font-size:11px;color:#333;margin-top:1px}
-  .hstatus{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:#555}
-  .live-dot{width:7px;height:7px;border-radius:50%;background:#2a2a2a;flex-shrink:0;transition:background .4s}
-  .hstatus.ok .live-dot{background:#22c55e}
-  .hstatus.ok .stext{color:#22c55e}
-  .hstatus.warn .live-dot{background:#f59e0b}
-  .hstatus.warn .stext{color:#f59e0b}
+/* ── Header ── */
+header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-items:center;gap:12px;flex-shrink:0;background:#0f0f0f}
+.logo{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}.logo span{color:#6366f1}
+.tagline{font-size:11px;color:#333;margin-top:1px}
+.hstatus{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:#555}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#2a2a2a;flex-shrink:0;transition:background .4s}
+.hstatus.ok .live-dot{background:#22c55e}.hstatus.ok .stext{color:#22c55e}
+.hstatus.warn .live-dot{background:#f59e0b}.hstatus.warn .stext{color:#f59e0b}
+.gear-btn{background:none;border:none;color:#333;cursor:pointer;font-size:16px;padding:4px 6px;border-radius:6px;transition:color .15s,background .15s;line-height:1}
+.gear-btn:hover{color:#aaa;background:#1a1a1a}
 
-  /* ── Setup Wizard ── */
-  #setup-screen{position:fixed;inset:0;background:#0f0f0f;display:flex;align-items:center;justify-content:center;z-index:100;padding:24px}
-  .setup-card{background:#141414;border:1px solid #222;border-radius:20px;padding:40px;max-width:480px;width:100%;text-align:center}
-  .setup-card .lock{font-size:52px;margin-bottom:20px}
-  .setup-card h1{font-size:22px;font-weight:700;margin-bottom:8px}
-  .setup-card h1 span{color:#6366f1}
-  .setup-card .sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:28px}
-  .steps{display:flex;flex-direction:column;gap:10px;margin-bottom:28px;text-align:left}
-  .step{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;background:#1a1a1a;border-radius:12px;border:1px solid #222;transition:border-color .3s}
-  .step.done{border-color:#1a3a1a}
-  .step.active{border-color:#6366f1}
-  .step-icon{font-size:20px;flex-shrink:0;width:26px;text-align:center;margin-top:2px}
-  .step-body .step-title{font-size:14px;font-weight:600;margin-bottom:3px}
-  .step-body .step-desc{font-size:12px;color:#555;line-height:1.5}
-  .step-body .step-desc a{color:#6366f1;text-decoration:none}
-  .step-status{margin-left:auto;font-size:12px;color:#444;flex-shrink:0;padding-top:2px}
-  .step.done .step-status{color:#22c55e}
-  .step.active .step-status{color:#f59e0b}
-  .setup-btn{width:100%;padding:14px;background:#6366f1;border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:background .2s}
-  .setup-btn:hover{background:#5254cc}
-  .setup-btn:disabled{background:#1e1e1e;color:#444;cursor:not-allowed}
-  .setup-note{font-size:12px;color:#333;margin-top:14px;line-height:1.5}
+/* ── Setup Wizard ── */
+#setup-screen{position:fixed;inset:0;background:#0f0f0f;display:flex;align-items:center;justify-content:center;z-index:100;padding:24px}
+.setup-card{background:#141414;border:1px solid #222;border-radius:20px;padding:40px;max-width:480px;width:100%;text-align:center}
+.setup-card .lock{font-size:52px;margin-bottom:20px}
+.setup-card h1{font-size:22px;font-weight:700;margin-bottom:8px}.setup-card h1 span{color:#6366f1}
+.setup-card .sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:28px}
+.steps{display:flex;flex-direction:column;gap:10px;margin-bottom:28px;text-align:left}
+.step{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;background:#1a1a1a;border-radius:12px;border:1px solid #222;transition:border-color .3s}
+.step.done{border-color:#1a3a1a}.step.active{border-color:#6366f1}
+.step-icon{font-size:20px;flex-shrink:0;width:26px;text-align:center;margin-top:2px}
+.step-body .step-title{font-size:14px;font-weight:600;margin-bottom:3px}
+.step-body .step-desc{font-size:12px;color:#555;line-height:1.5}.step-body .step-desc a{color:#6366f1;text-decoration:none}
+.step-status{margin-left:auto;font-size:12px;color:#444;flex-shrink:0;padding-top:2px}
+.step.done .step-status{color:#22c55e}.step.active .step-status{color:#f59e0b}
+.setup-btn{width:100%;padding:14px;background:#6366f1;border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:background .2s}
+.setup-btn:hover{background:#5254cc}.setup-btn:disabled{background:#1e1e1e;color:#444;cursor:not-allowed}
+.setup-note{font-size:12px;color:#333;margin-top:14px;line-height:1.5}
 
-  /* ── Main Layout ── */
-  .main{display:flex;flex:1;overflow:hidden}
+/* ── Main Layout ── */
+.main{display:flex;flex:1;overflow:hidden}
 
-  /* ── Left Panel ── */
-  .sidebar{
-    width:280px;
-    border-right:1px solid #1a1a1a;
-    display:flex;
-    flex-direction:column;
-    flex-shrink:0;
-    background:#0c0c0c;
-    overflow:hidden;
-    transition:width .25s ease, opacity .25s ease;
-  }
-  .sidebar.collapsed{
-    width:0;
-    opacity:0;
-    border-right:none;
-    pointer-events:none;
-  }
+/* ── Sidebar ── */
+.sidebar{width:280px;border-right:1px solid #1a1a1a;display:flex;flex-direction:column;flex-shrink:0;background:#0c0c0c;overflow:hidden;transition:width .25s ease,opacity .25s ease}
+.sidebar.collapsed{width:0;opacity:0;border-right:none;pointer-events:none}
+.sidebar-toggle{background:none;border:none;color:#333;cursor:pointer;font-size:16px;padding:4px 6px;border-radius:6px;transition:color .15s,background .15s;margin-left:4px;flex-shrink:0;line-height:1}
+.sidebar-toggle:hover{color:#aaa;background:#1a1a1a}
 
-  /* ── Sidebar toggle button ── */
-  .sidebar-toggle{
-    background:none;
-    border:none;
-    color:#333;
-    cursor:pointer;
-    font-size:16px;
-    padding:4px 6px;
-    border-radius:6px;
-    transition:color .15s, background .15s;
-    margin-left:4px;
-    flex-shrink:0;
-    line-height:1;
-  }
-  .sidebar-toggle:hover{color:#aaa;background:#1a1a1a}
+/* Workspace bar */
+.workspace-bar{margin:14px 14px 0;display:flex;gap:6px;flex-shrink:0;align-items:center}
+.workspace-select{flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:8px;padding:7px 26px 7px 10px;color:#ccc;font-size:12px;font-weight:500;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;min-width:0;transition:border-color .2s;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23444'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+.workspace-select:focus{border-color:#6366f1}.workspace-select option{background:#1a1a1a;color:#e0e0e0}
+.new-ws-btn{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:7px 10px;color:#555;font-size:16px;cursor:pointer;transition:all .15s;flex-shrink:0;line-height:1}
+.new-ws-btn:hover{border-color:#6366f1;color:#6366f1}
 
-  /* ── Workspace bar ── */
-  .workspace-bar{
-    margin:14px 14px 0;
-    display:flex;
-    gap:6px;
-    flex-shrink:0;
-    align-items:center;
-  }
-  .workspace-select{
-    flex:1;
-    background:#141414;
-    border:1px solid #1e1e1e;
-    border-radius:8px;
-    padding:7px 10px;
-    color:#ccc;
-    font-size:12px;
-    font-weight:500;
-    outline:none;
-    cursor:pointer;
-    appearance:none;
-    -webkit-appearance:none;
-    min-width:0;
-    transition:border-color .2s;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23444'/%3E%3C/svg%3E");
-    background-repeat:no-repeat;
-    background-position:right 9px center;
-    padding-right:26px;
-  }
-  .workspace-select:focus{border-color:#6366f1}
-  .workspace-select option{background:#1a1a1a;color:#e0e0e0}
-  .new-ws-btn{
-    background:#141414;
-    border:1px solid #2a2a2a;
-    border-radius:8px;
-    padding:7px 10px;
-    color:#555;
-    font-size:16px;
-    cursor:pointer;
-    transition:all .15s;
-    flex-shrink:0;
-    line-height:1;
-  }
-  .new-ws-btn:hover{border-color:#6366f1;color:#6366f1}
+/* Upload zone */
+.upload-zone{margin:10px 14px 0;border:2px dashed #1e1e1e;border-radius:10px;padding:18px 12px;text-align:center;cursor:pointer;transition:all .2s;flex-shrink:0}
+.upload-zone:hover,.upload-zone.over{border-color:#6366f1;background:#0e0e1e}
+.upload-zone .ico{font-size:22px;margin-bottom:6px}
+.upload-zone p{font-size:11px;color:#444;line-height:1.6}.upload-zone strong{color:#777;font-weight:500;font-size:12px}
+#file-input{display:none}
 
-  /* Upload zone at top */
-  .upload-zone{
-    margin:10px 14px 0;
-    border:2px dashed #1e1e1e;
-    border-radius:10px;
-    padding:18px 12px;
-    text-align:center;
-    cursor:pointer;
-    transition:all .2s;
-    flex-shrink:0;
-  }
-  .upload-zone:hover,.upload-zone.over{border-color:#6366f1;background:#0e0e1e}
-  .upload-zone .ico{font-size:22px;margin-bottom:6px}
-  .upload-zone p{font-size:11px;color:#444;line-height:1.6}
-  .upload-zone strong{color:#777;font-weight:500;font-size:12px}
-  #file-input{display:none}
+/* URL input */
+.url-zone{margin:10px 14px 0;display:flex;gap:6px;flex-shrink:0}
+.url-zone input{flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:8px;padding:8px 11px;color:#e0e0e0;font-size:12px;outline:none;transition:border-color .2s;min-width:0}
+.url-zone input:focus{border-color:#6366f1}.url-zone input::placeholder{color:#333}
+.url-zone button{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#888;font-size:12px;cursor:pointer;white-space:nowrap;transition:all .15s;flex-shrink:0}
+.url-zone button:hover{border-color:#6366f1;color:#e0e0e0}
 
-  /* URL input row */
-  .url-zone{
-    margin:10px 14px 0;
-    display:flex;
-    gap:6px;
-    flex-shrink:0;
-  }
-  .url-zone input{
-    flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:8px;
-    padding:8px 11px;color:#e0e0e0;font-size:12px;outline:none;
-    transition:border-color .2s;min-width:0;
-  }
-  .url-zone input:focus{border-color:#6366f1}
-  .url-zone input::placeholder{color:#333}
-  .url-zone button{
-    background:#141414;border:1px solid #2a2a2a;border-radius:8px;
-    padding:8px 12px;color:#888;font-size:12px;cursor:pointer;
-    white-space:nowrap;transition:all .15s;flex-shrink:0;
-  }
-  .url-zone button:hover{border-color:#6366f1;color:#e0e0e0}
+/* Source panels */
+.source-panels{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.source-panels::-webkit-scrollbar{width:4px}.source-panels::-webkit-scrollbar-track{background:transparent}.source-panels::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+.section-header{display:flex;align-items:center;gap:7px;padding:0 2px;margin-bottom:6px}
+.section-label{font-size:10px;font-weight:600;color:#3a3a3a;text-transform:uppercase;letter-spacing:.1em;flex:1}
+.section-count{font-size:10px;color:#2a2a2a;background:#1a1a1a;border-radius:10px;padding:1px 7px;font-weight:600}
+.file-card{background:#141414;border:1px solid #1a1a1a;border-radius:9px;padding:10px 12px;display:flex;align-items:flex-start;gap:9px;transition:border-color .15s}
+.file-card:hover{border-color:#2a2a2a}
+.card-icon{font-size:16px;flex-shrink:0;margin-top:1px;line-height:1}
+.card-info{flex:1;min-width:0}
+.card-name{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#ccc;margin-bottom:2px}
+.card-meta{font-size:11px;color:#333}
+.card-del{background:none;border:none;color:#222;cursor:pointer;font-size:15px;padding:0;flex-shrink:0;line-height:1;transition:color .15s;margin-top:1px}
+.card-del:hover{color:#ef4444}
+.section-empty{font-size:11px;color:#252525;padding:10px 4px;font-style:italic}
+.section-divider{height:1px;background:#161616;margin:2px 0}
 
-  /* Source panels */
-  .source-panels{
-    flex:1;
-    overflow-y:auto;
-    padding:14px;
-    display:flex;
-    flex-direction:column;
-    gap:12px;
-  }
-  .source-panels::-webkit-scrollbar{width:4px}
-  .source-panels::-webkit-scrollbar-track{background:transparent}
-  .source-panels::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+/* Sidebar footer */
+.sidebar-footer{border-top:1px solid #161616;padding:12px 14px;flex-shrink:0}
+.setting-row{display:flex;align-items:center;gap:8px}
+.setting-label{font-size:10px;font-weight:600;color:#2e2e2e;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0}
+.model-select{flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:7px;padding:6px 26px 6px 10px;color:#666;font-size:12px;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;min-width:0;transition:border-color .2s,color .2s;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23444'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+.model-select:focus{border-color:#6366f1;color:#ccc}.model-select option{background:#1a1a1a;color:#e0e0e0}
 
-  /* Section header */
-  .section-header{
-    display:flex;
-    align-items:center;
-    gap:7px;
-    padding:0 2px;
-    margin-bottom:6px;
-  }
-  .section-header .section-label{
-    font-size:10px;
-    font-weight:600;
-    color:#3a3a3a;
-    text-transform:uppercase;
-    letter-spacing:.1em;
-    flex:1;
-  }
-  .section-header .section-count{
-    font-size:10px;
-    color:#2a2a2a;
-    background:#1a1a1a;
-    border-radius:10px;
-    padding:1px 7px;
-    font-weight:600;
-  }
+/* ── Chat area ── */
+.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0f0f0f}
 
-  /* File card */
-  .file-card{
-    background:#141414;
-    border:1px solid #1a1a1a;
-    border-radius:9px;
-    padding:10px 12px;
-    display:flex;
-    align-items:flex-start;
-    gap:9px;
-    transition:border-color .15s;
-  }
-  .file-card:hover{border-color:#2a2a2a}
-  .file-card .card-icon{font-size:16px;flex-shrink:0;margin-top:1px;line-height:1}
-  .file-card .card-info{flex:1;min-width:0}
-  .file-card .card-name{
-    font-size:12px;font-weight:500;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    color:#ccc;margin-bottom:2px;
-  }
-  .file-card .card-meta{font-size:11px;color:#333}
-  .file-card .card-del{
-    background:none;border:none;color:#222;cursor:pointer;
-    font-size:15px;padding:0;flex-shrink:0;line-height:1;
-    transition:color .15s;margin-top:1px;
-  }
-  .file-card .card-del:hover{color:#ef4444}
+/* Tab bar */
+.tab-bar{display:flex;border-bottom:1px solid #1a1a1a;flex-shrink:0;background:#0c0c0c}
+.tab-btn{padding:10px 20px;font-size:13px;font-weight:500;color:#333;background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;letter-spacing:.01em}
+.tab-btn.active{color:#e0e0e0;border-bottom-color:#6366f1}
+.tab-btn:hover:not(.active){color:#777}
 
-  /* Empty section placeholder */
-  .section-empty{
-    font-size:11px;color:#252525;
-    padding:10px 4px;
-    font-style:italic;
-  }
+/* Chat panel */
+.msgs{flex:1;overflow-y:auto;padding:28px 32px;display:flex;flex-direction:column;gap:18px}
+.msgs::-webkit-scrollbar{width:4px}.msgs::-webkit-scrollbar-track{background:transparent}.msgs::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#222;text-align:center;gap:14px;user-select:none}
+.empty-state .big{font-size:44px}.empty-state .empty-title{font-size:15px;font-weight:600;color:#2a2a2a}
+.empty-state .empty-sub{font-size:13px;color:#222;line-height:1.7}
+.msg-user{align-self:flex-end;background:#6366f1;color:#fff;padding:11px 16px;border-radius:16px 16px 3px 16px;font-size:14px;max-width:65%;line-height:1.6}
+.msg-bot{align-self:flex-start;max-width:78%}
+.msg-bot .bubble{background:#141414;border:1px solid #1a1a1a;padding:14px 18px;border-radius:3px 16px 16px 16px;font-size:14px;white-space:pre-wrap;line-height:1.75;word-break:break-word;color:#d0d0d0}
+.msg-bot .src{font-size:11px;color:#2a2a2a;margin-top:7px;padding-left:2px}
+.status-msg{font-size:12px;color:#444;padding:5px 4px;font-style:italic;align-self:flex-start;max-width:78%}
 
-  /* Section divider */
-  .section-divider{height:1px;background:#161616;margin:2px 0}
+/* Input bar */
+.bar{padding:14px 20px;border-top:1px solid #1a1a1a;display:flex;gap:9px;flex-shrink:0;background:#0f0f0f}
+.bar input{flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:11px;padding:12px 16px;color:#e0e0e0;font-size:14px;outline:none;transition:border-color .2s}
+.bar input:focus{border-color:#6366f1}.bar input::placeholder{color:#2d2d2d}
+.bar button{background:#6366f1;border:none;border-radius:11px;padding:12px 22px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}
+.bar button:hover{background:#5254cc}.bar button:disabled{background:#1a1a1a;color:#2d2d2d;cursor:not-allowed}
+.mode-btn{background:#141414;border:1px solid #222;border-radius:11px;padding:12px 15px;color:#444;font-size:13px;font-weight:500;cursor:pointer;transition:all .2s;white-space:nowrap}
+.mode-btn.agent{background:#0e0e22;border-color:#6366f1;color:#6366f1}
 
-  /* ── Sidebar footer (model picker) ── */
-  .sidebar-footer{
-    border-top:1px solid #161616;
-    padding:12px 14px;
-    flex-shrink:0;
-  }
-  .setting-row{
-    display:flex;
-    align-items:center;
-    gap:8px;
-  }
-  .setting-label{
-    font-size:10px;
-    font-weight:600;
-    color:#2e2e2e;
-    text-transform:uppercase;
-    letter-spacing:.08em;
-    flex-shrink:0;
-  }
-  .model-select{
-    flex:1;
-    background:#141414;
-    border:1px solid #1e1e1e;
-    border-radius:7px;
-    padding:6px 26px 6px 10px;
-    color:#666;
-    font-size:12px;
-    outline:none;
-    cursor:pointer;
-    appearance:none;
-    -webkit-appearance:none;
-    min-width:0;
-    transition:border-color .2s, color .2s;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23444'/%3E%3C/svg%3E");
-    background-repeat:no-repeat;
-    background-position:right 9px center;
-  }
-  .model-select:focus{border-color:#6366f1;color:#ccc}
-  .model-select option{background:#1a1a1a;color:#e0e0e0}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.cursor{display:inline-block;width:2px;height:14px;background:#6366f1;margin-left:1px;vertical-align:middle;animation:blink .7s step-end infinite}
 
-  /* ── Chat area ── */
-  .chat{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0f0f0f}
-  .msgs{flex:1;overflow-y:auto;padding:28px 32px;display:flex;flex-direction:column;gap:18px}
-  .msgs::-webkit-scrollbar{width:4px}
-  .msgs::-webkit-scrollbar-track{background:transparent}
-  .msgs::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+/* ── Feed panel ── */
+.feed-panel{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:10px}
+.feed-panel::-webkit-scrollbar{width:4px}.feed-panel::-webkit-scrollbar-track{background:transparent}.feed-panel::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+.feed-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-shrink:0}
+.feed-title-row{display:flex;align-items:center;gap:8px}
+.feed-title{font-size:13px;font-weight:600;color:#555}
+.feed-refresh-btn{background:none;border:1px solid #1e1e1e;border-radius:6px;padding:5px 10px;color:#333;font-size:11px;cursor:pointer;transition:all .15s}
+.feed-refresh-btn:hover{border-color:#6366f1;color:#6366f1}
+.feed-connector-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.connector-badge{display:flex;align-items:center;gap:5px;background:#141414;border:1px solid #1a1a1a;border-radius:20px;padding:4px 10px;font-size:11px;color:#444}
+.connector-badge.active{border-color:#6366f1;color:#6366f1}
+.connector-badge .dot{width:5px;height:5px;border-radius:50%;background:#2a2a2a;flex-shrink:0}
+.connector-badge.active .dot{background:#6366f1}
+.feed-item{background:#141414;border:1px solid #1a1a1a;border-radius:10px;padding:12px 14px;display:flex;gap:12px;align-items:flex-start;transition:border-color .15s;cursor:default}
+.feed-item:hover{border-color:#252525}
+.feed-item-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.feed-item-body{flex:1;min-width:0}
+.feed-item-title{font-size:13px;font-weight:500;color:#ccc;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.feed-item-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.feed-ws-badge{font-size:10px;background:#1a1a1a;border:1px solid #222;border-radius:10px;padding:1px 7px;color:#444}
+.feed-source-badge{font-size:10px;color:#333}
+.feed-time{font-size:10px;color:#2a2a2a;margin-left:auto;flex-shrink:0}
+.feed-chunks{font-size:10px;color:#2a2a2a}
+.feed-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#222;text-align:center;gap:12px}
+.feed-empty .big{font-size:40px}.feed-empty p{font-size:13px;color:#2a2a2a;line-height:1.7}
 
-  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#222;text-align:center;gap:14px;user-select:none}
-  .empty-state .big{font-size:44px}
-  .empty-state .empty-title{font-size:15px;font-weight:600;color:#2a2a2a}
-  .empty-state .empty-sub{font-size:13px;color:#222;line-height:1.7}
+/* ── Settings Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px}
+.modal-overlay.hidden{display:none}
+.modal{background:#111;border:1px solid #222;border-radius:18px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.modal-header h2{font-size:16px;font-weight:700;color:#e0e0e0}
+.modal-close{background:none;border:none;color:#444;font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px;transition:color .15s}
+.modal-close:hover{color:#aaa}
+.modal-body{padding:20px 24px;overflow-y:auto;flex:1}
+.connector-section{margin-bottom:28px}
+.connector-section:last-child{margin-bottom:0}
+.connector-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.connector-name{display:flex;align-items:center;gap:10px}
+.connector-icon{font-size:22px}
+.connector-label{font-size:15px;font-weight:600;color:#e0e0e0}
+.connector-sub{font-size:12px;color:#444;margin-top:1px}
+.toggle{position:relative;width:36px;height:20px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:#2a2a2a;border-radius:20px;cursor:pointer;transition:background .2s}
+.toggle-slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:#555;border-radius:50%;transition:transform .2s,background .2s}
+.toggle input:checked + .toggle-slider{background:#6366f1}
+.toggle input:checked + .toggle-slider:before{transform:translateX(16px);background:#fff}
+.connector-fields{display:flex;flex-direction:column;gap:10px}
+.field-row{display:flex;flex-direction:column;gap:5px}
+.field-label{font-size:11px;font-weight:600;color:#444;text-transform:uppercase;letter-spacing:.06em}
+.field-input{background:#141414;border:1px solid #1e1e1e;border-radius:8px;padding:9px 12px;color:#e0e0e0;font-size:13px;outline:none;transition:border-color .2s;width:100%}
+.field-input:focus{border-color:#6366f1}.field-input::placeholder{color:#2a2a2a}
+.field-hint{font-size:11px;color:#333;line-height:1.5}
+.field-hint a{color:#6366f1;text-decoration:none}
+.connector-actions{display:flex;gap:8px;margin-top:14px}
+.btn-save{background:#6366f1;border:none;border-radius:8px;padding:9px 18px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s}
+.btn-save:hover{background:#5254cc}
+.btn-sync{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:9px 18px;color:#888;font-size:13px;cursor:pointer;transition:all .15s}
+.btn-sync:hover{border-color:#6366f1;color:#e0e0e0}
+.btn-sync:disabled{opacity:.4;cursor:not-allowed}
+.sync-status{font-size:11px;color:#444;margin-top:8px;min-height:16px}
+.coming-soon-section{background:#0c0c0c;border:1px solid #161616;border-radius:10px;padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px}
+.coming-soon-section .cs-icon{font-size:20px;flex-shrink:0}
+.cs-label{font-size:13px;font-weight:500;color:#333}
+.cs-sub{font-size:11px;color:#222;margin-top:2px}
+.cs-pill{margin-left:auto;font-size:10px;background:#1a1a1a;border:1px solid #222;border-radius:10px;padding:2px 8px;color:#2a2a2a;flex-shrink:0}
+.modal-divider{height:1px;background:#1a1a1a;margin:20px 0}
 
-  .msg-user{
-    align-self:flex-end;background:#6366f1;color:#fff;
-    padding:11px 16px;border-radius:16px 16px 3px 16px;
-    font-size:14px;max-width:65%;line-height:1.6;
-  }
-  .msg-bot{align-self:flex-start;max-width:78%}
-  .msg-bot .bubble{
-    background:#141414;border:1px solid #1a1a1a;
-    padding:14px 18px;border-radius:3px 16px 16px 16px;
-    font-size:14px;white-space:pre-wrap;line-height:1.75;word-break:break-word;
-    color:#d0d0d0;
-  }
-  .msg-bot .src{font-size:11px;color:#2a2a2a;margin-top:7px;padding-left:2px}
+/* Toast */
+.toast{position:fixed;bottom:72px;right:18px;background:#22c55e;color:#fff;padding:9px 15px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transition:opacity .25s;pointer-events:none;z-index:300;max-width:300px}
+.toast.show{opacity:1}.toast.err{background:#ef4444}
 
-  /* Input bar */
-  .bar{
-    padding:14px 20px;border-top:1px solid #1a1a1a;
-    display:flex;gap:9px;flex-shrink:0;background:#0f0f0f;
-  }
-  .bar input{
-    flex:1;background:#141414;border:1px solid #1e1e1e;
-    border-radius:11px;padding:12px 16px;color:#e0e0e0;
-    font-size:14px;outline:none;transition:border-color .2s;
-  }
-  .bar input:focus{border-color:#6366f1}
-  .bar input::placeholder{color:#2d2d2d}
-  .bar button{
-    background:#6366f1;border:none;border-radius:11px;
-    padding:12px 22px;color:#fff;font-size:14px;font-weight:600;
-    cursor:pointer;transition:background .15s;
-  }
-  .bar button:hover{background:#5254cc}
-  .bar button:disabled{background:#1a1a1a;color:#2d2d2d;cursor:not-allowed}
-  .mode-btn{
-    background:#141414;border:1px solid #222;border-radius:11px;
-    padding:12px 15px;color:#444;font-size:13px;font-weight:500;
-    cursor:pointer;transition:all .2s;white-space:nowrap;
-  }
-  .mode-btn.agent{background:#0e0e22;border-color:#6366f1;color:#6366f1}
-
-  /* Agent status line */
-  .status-msg{
-    font-size:12px;color:#444;padding:5px 4px;
-    font-style:italic;align-self:flex-start;max-width:78%;
-  }
-
-  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-  .cursor{display:inline-block;width:2px;height:14px;background:#6366f1;margin-left:1px;vertical-align:middle;animation:blink .7s step-end infinite}
-
-  .toast{
-    position:fixed;bottom:72px;right:18px;background:#22c55e;color:#fff;
-    padding:9px 15px;border-radius:8px;font-size:13px;font-weight:500;
-    opacity:0;transition:opacity .25s;pointer-events:none;z-index:200;max-width:300px;
-  }
-  .toast.show{opacity:1}
-  .toast.err{background:#ef4444}
-
-  /* ── Mobile ─────────────────────────────────────────────── */
-  @media (max-width: 640px) {
-    .sidebar{
-      position:fixed;
-      top:0;left:0;bottom:0;
-      z-index:50;
-      width:280px;
-      transform:translateX(-100%);
-      transition:transform .25s ease, opacity .25s ease;
-      opacity:0;
-    }
-    .sidebar.mobile-open{
-      transform:translateX(0);
-      opacity:1;
-    }
-    .sidebar-overlay{
-      display:none;
-      position:fixed;inset:0;
-      background:rgba(0,0,0,.6);
-      z-index:49;
-    }
-    .sidebar-overlay.show{display:block}
-    .chat{width:100%}
-    .bar input{font-size:16px;padding:13px 14px}
-    .bar button{padding:13px 16px}
-    .mode-btn{padding:13px 12px;font-size:12px}
-    .msg-user{max-width:85%}
-    .msg-bot{max-width:90%}
-    .msgs{padding:16px 14px;gap:14px}
-    header{padding:10px 14px}
-    .tagline{display:none}
-    .toast{bottom:90px}
-  }
+/* ── Mobile ── */
+@media (max-width:640px) {
+  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:50;width:280px;transform:translateX(-100%);transition:transform .25s ease,opacity .25s ease;opacity:0}
+  .sidebar.mobile-open{transform:translateX(0);opacity:1}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:49}
+  .sidebar-overlay.show{display:block}
+  .chat-area{width:100%}
+  .bar input{font-size:16px;padding:13px 14px}
+  .bar button{padding:13px 16px}.mode-btn{padding:13px 12px;font-size:12px}
+  .msg-user{max-width:85%}.msg-bot{max-width:90%}
+  .msgs{padding:16px 14px;gap:14px}
+  header{padding:10px 14px}.tagline{display:none}
+  .toast{bottom:90px}
+  .tab-btn{padding:10px 14px;font-size:12px}
+}
 </style>
 </head>
-
 <body>
 
-<!-- ── Setup Wizard ── -->
+<!-- Setup Wizard -->
 <div id="setup-screen">
   <div class="setup-card">
     <div class="lock">🔒</div>
     <h1>Welcome to <span>VaultMind</span></h1>
     <p class="sub">Your personal AI. Runs entirely on your computer.<br>Your documents never leave your machine.</p>
     <div class="steps">
-      <div class="step" id="s-ollama">
-        <div class="step-icon">🧠</div>
-        <div class="step-body">
-          <div class="step-title">Ollama</div>
-          <div class="step-desc">Runs AI models locally. <a href="https://ollama.ai/download" target="_blank">Download at ollama.ai</a> if not installed, then run: <code>bash start.sh</code></div>
-        </div>
-        <div class="step-status" id="s-ollama-status">Checking...</div>
-      </div>
-      <div class="step" id="s-embed">
-        <div class="step-icon">📐</div>
-        <div class="step-body">
-          <div class="step-title">Embedding Model</div>
-          <div class="step-desc">nomic-embed-text — understands your documents (274 MB, one-time download)</div>
-        </div>
-        <div class="step-status" id="s-embed-status">Waiting...</div>
-      </div>
-      <div class="step" id="s-llm">
-        <div class="step-icon">💬</div>
-        <div class="step-body">
-          <div class="step-title">Language Model</div>
-          <div class="step-desc">mistral — answers your questions (~4 GB, one-time download)</div>
-        </div>
-        <div class="step-status" id="s-llm-status">Waiting...</div>
-      </div>
-      <div class="step" id="s-backend">
-        <div class="step-icon">⚙️</div>
-        <div class="step-body">
-          <div class="step-title">VaultMind Backend</div>
-          <div class="step-desc">Local server that connects everything together</div>
-        </div>
-        <div class="step-status" id="s-backend-status">Checking...</div>
-      </div>
+      <div class="step" id="s-ollama"><div class="step-icon">🧠</div><div class="step-body"><div class="step-title">Ollama</div><div class="step-desc">Runs AI locally. <a href="https://ollama.ai/download" target="_blank">Download at ollama.ai</a>, then run: <code>bash start.sh</code></div></div><div class="step-status" id="s-ollama-status">Checking...</div></div>
+      <div class="step" id="s-embed"><div class="step-icon">📐</div><div class="step-body"><div class="step-title">Embedding Model</div><div class="step-desc">nomic-embed-text — understands your documents (274 MB)</div></div><div class="step-status" id="s-embed-status">Waiting...</div></div>
+      <div class="step" id="s-llm"><div class="step-icon">💬</div><div class="step-body"><div class="step-title">Language Model</div><div class="step-desc">mistral — answers your questions (~4 GB)</div></div><div class="step-status" id="s-llm-status">Waiting...</div></div>
+      <div class="step" id="s-backend"><div class="step-icon">⚙️</div><div class="step-body"><div class="step-title">VaultMind Backend</div><div class="step-desc">Local server that connects everything</div></div><div class="step-status" id="s-backend-status">Checking...</div></div>
     </div>
     <button class="setup-btn" id="setup-btn" disabled>Setting up...</button>
     <p class="setup-note" id="setup-note">Run <strong>bash start.sh</strong> in Terminal to set everything up automatically.</p>
   </div>
 </div>
 
-<!-- ── Header ── -->
+<!-- Header -->
 <header>
   <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle panel">☰</button>
-  <div>
-    <div class="logo">Vault<span>Mind</span></div>
-    <div class="tagline">Your AI. Your data. Your machine.</div>
-  </div>
+  <div><div class="logo">Vault<span>Mind</span></div><div class="tagline">Your AI. Your data. Your machine.</div></div>
   <div class="hstatus" id="hstatus">
     <div class="live-dot"></div>
     <span class="stext">Connecting...</span>
   </div>
+  <button class="gear-btn" id="gear-btn" title="Connectors &amp; Settings">⚙️</button>
 </header>
 
-<!-- ── Sidebar overlay (mobile tap-to-close) ── -->
+<!-- Sidebar overlay -->
 <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-<!-- ── App ── -->
+<!-- App -->
 <div class="main">
 
-  <!-- Left Panel -->
+  <!-- Sidebar -->
   <div class="sidebar">
-
-    <!-- Workspace switcher -->
     <div class="workspace-bar">
-      <select id="workspace-select" class="workspace-select" title="Switch workspace">
-        <option value="Default">Default</option>
-      </select>
+      <select id="workspace-select" class="workspace-select"><option value="Default">Default</option></select>
       <button class="new-ws-btn" id="new-ws-btn" title="New workspace">+</button>
     </div>
-
-    <!-- Drop zone -->
-    <div class="upload-zone" id="zone">
-      <div class="ico">📂</div>
-      <p><strong>Drop files here</strong><br>PDF · Word · TXT · MD · CSV</p>
-    </div>
+    <div class="upload-zone" id="zone"><div class="ico">📂</div><p><strong>Drop files here</strong><br>PDF · Word · TXT · MD · CSV</p></div>
     <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.csv" multiple>
-
-    <!-- URL input -->
     <div class="url-zone">
       <input id="url-input" type="url" placeholder="Paste a URL to index…">
       <button id="url-btn">Add</button>
     </div>
-
-    <!-- Source panels -->
     <div class="source-panels">
-
-      <!-- Documents section -->
       <div id="docs-section">
-        <div class="section-header">
-          <span class="section-label">Documents</span>
-          <span class="section-count" id="docs-count">0</span>
-        </div>
-        <div id="docs-list">
-          <div class="section-empty" id="docs-empty">No documents indexed yet</div>
-        </div>
+        <div class="section-header"><span class="section-label">Documents</span><span class="section-count" id="docs-count">0</span></div>
+        <div id="docs-list"><div class="section-empty" id="docs-empty">No documents indexed yet</div></div>
       </div>
-
       <div class="section-divider"></div>
-
-      <!-- Web sources section -->
       <div id="web-section">
-        <div class="section-header">
-          <span class="section-label">Web Sources</span>
-          <span class="section-count" id="web-count">0</span>
-        </div>
-        <div id="web-list">
-          <div class="section-empty" id="web-empty">No URLs indexed yet</div>
-        </div>
+        <div class="section-header"><span class="section-label">Web Sources</span><span class="section-count" id="web-count">0</span></div>
+        <div id="web-list"><div class="section-empty" id="web-empty">No URLs indexed yet</div></div>
       </div>
-
     </div>
-
-    <!-- Sidebar footer: model picker -->
     <div class="sidebar-footer">
       <div class="setting-row">
         <span class="setting-label">Model</span>
-        <select id="model-select" class="model-select" title="Select language model">
+        <select id="model-select" class="model-select">
           <option value="mistral">Mistral 7B</option>
           <option value="llama3.2">Llama 3.2</option>
           <option value="phi3">Phi-3 Mini</option>
@@ -520,25 +292,114 @@
         </select>
       </div>
     </div>
-
   </div>
 
-  <!-- Chat -->
-  <div class="chat">
-    <div class="msgs" id="msgs">
-      <div class="empty-state" id="empty">
-        <div class="big">🔒</div>
-        <div class="empty-title">Nothing leaves this machine</div>
-        <div class="empty-sub">Drop a file or paste a URL on the left,<br>then ask anything about it.</div>
+  <!-- Chat + Feed area -->
+  <div class="chat-area">
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-chat" onclick="switchTab('chat')">💬 Chat</button>
+      <button class="tab-btn" id="tab-feed" onclick="switchTab('feed')">📡 Feed</button>
+    </div>
+
+    <!-- Chat panel -->
+    <div id="panel-chat" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="msgs" id="msgs">
+        <div class="empty-state" id="empty">
+          <div class="big">🔒</div>
+          <div class="empty-title">Nothing leaves this machine</div>
+          <div class="empty-sub">Drop a file or paste a URL on the left,<br>then ask anything about it.</div>
+        </div>
+      </div>
+      <div class="bar">
+        <button class="mode-btn" id="mode-btn">🔒 Vault</button>
+        <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
+        <button id="send" disabled>Send</button>
       </div>
     </div>
-    <div class="bar">
-      <button class="mode-btn" id="mode-btn" title="Toggle Agent mode">🔒 Vault</button>
-      <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
-      <button id="send" disabled>Send</button>
+
+    <!-- Feed panel -->
+    <div id="panel-feed" style="flex:1;display:none;flex-direction:column;overflow:hidden">
+      <div class="feed-panel" id="feed-list">
+        <div class="feed-header">
+          <div class="feed-title-row"><span class="feed-title">All Sources — Live Feed</span></div>
+          <button class="feed-refresh-btn" onclick="loadFeed()">↻ Refresh</button>
+        </div>
+        <div class="feed-connector-bar" id="connector-bar"></div>
+        <div class="feed-empty" id="feed-empty">
+          <div class="big">📡</div>
+          <p>Nothing in the feed yet.<br>Upload docs, add URLs, or connect<br>Notion via the ⚙️ settings.</p>
+        </div>
+      </div>
     </div>
   </div>
 
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>⚙️ Connectors</h2>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Notion -->
+      <div class="connector-section">
+        <div class="connector-head">
+          <div class="connector-name">
+            <span class="connector-icon">📓</span>
+            <div><div class="connector-label">Notion</div><div class="connector-sub">Auto-sync pages to your vault</div></div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="notion-enabled"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="connector-fields">
+          <div class="field-row">
+            <label class="field-label">Integration Token</label>
+            <input class="field-input" type="password" id="notion-token" placeholder="secret_xxxxxxxxxxxxxxxx">
+            <span class="field-hint">Create one at <a href="https://www.notion.so/my-integrations" target="_blank">notion.so/my-integrations</a> and share your pages with it.</span>
+          </div>
+          <div class="field-row">
+            <label class="field-label">Workspace Name</label>
+            <input class="field-input" type="text" id="notion-workspace" placeholder="Notion" value="Notion">
+            <span class="field-hint">Pages will be indexed into this workspace.</span>
+          </div>
+          <div class="field-row">
+            <label class="field-label">Sync every (minutes)</label>
+            <input class="field-input" type="number" id="notion-interval" value="15" min="5" max="1440">
+          </div>
+          <div class="connector-actions">
+            <button class="btn-save" onclick="saveNotion()">Save</button>
+            <button class="btn-sync" id="notion-sync-btn" onclick="syncNotion()">↻ Sync Now</button>
+          </div>
+          <div class="sync-status" id="notion-sync-status"></div>
+        </div>
+      </div>
+
+      <div class="modal-divider"></div>
+
+      <!-- Coming soon -->
+      <div style="margin-bottom:10px">
+        <div class="field-label" style="margin-bottom:12px">Coming Soon</div>
+        <div class="coming-soon-section">
+          <span class="cs-icon">📧</span>
+          <div><div class="cs-label">Gmail</div><div class="cs-sub">Index emails and threads</div></div>
+          <span class="cs-pill">Soon</span>
+        </div>
+        <div class="coming-soon-section">
+          <span class="cs-icon">💬</span>
+          <div><div class="cs-label">Slack</div><div class="cs-sub">Index channels and DMs</div></div>
+          <span class="cs-pill">Soon</span>
+        </div>
+        <div class="coming-soon-section">
+          <span class="cs-icon">🟢</span>
+          <div><div class="cs-label">WhatsApp</div><div class="cs-sub">Index conversations</div></div>
+          <span class="cs-pill">Soon</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -554,55 +415,113 @@ let busy             = false;
 let agentMode        = false;
 let docCount         = 0;
 let webCount         = 0;
+let currentTab       = 'chat';
 
-// ── DOM refs ──────────────────────────────────────────────────
-const sidebar         = document.querySelector('.sidebar');
-const sidebarToggle   = document.getElementById('sidebar-toggle');
-const sidebarOverlay  = document.getElementById('sidebar-overlay');
-const msgsEl          = document.getElementById('msgs');
-const qEl             = document.getElementById('q');
-const sendBtn         = document.getElementById('send');
-const zoneEl          = document.getElementById('zone');
-const fileInp         = document.getElementById('file-input');
-const hstatus         = document.getElementById('hstatus');
-const wsSelect        = document.getElementById('workspace-select');
-const newWsBtn        = document.getElementById('new-ws-btn');
-const modelSelect     = document.getElementById('model-select');
-const modeBtn         = document.getElementById('mode-btn');
+// ── DOM ───────────────────────────────────────────────────────
+const sidebar        = document.querySelector('.sidebar');
+const sidebarToggle  = document.getElementById('sidebar-toggle');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
+const msgsEl         = document.getElementById('msgs');
+const qEl            = document.getElementById('q');
+const sendBtn        = document.getElementById('send');
+const zoneEl         = document.getElementById('zone');
+const fileInp        = document.getElementById('file-input');
+const hstatus        = document.getElementById('hstatus');
+const wsSelect       = document.getElementById('workspace-select');
+const newWsBtn       = document.getElementById('new-ws-btn');
+const modelSelect    = document.getElementById('model-select');
+const modeBtn        = document.getElementById('mode-btn');
+
+// ── Tabs ──────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('panel-chat').style.display = tab === 'chat' ? 'flex' : 'none';
+  document.getElementById('panel-feed').style.display = tab === 'feed' ? 'flex' : 'none';
+  document.getElementById('tab-chat').className = 'tab-btn' + (tab === 'chat' ? ' active' : '');
+  document.getElementById('tab-feed').className = 'tab-btn' + (tab === 'feed' ? ' active' : '');
+  if (tab === 'feed') loadFeed();
+}
 
 // ── Sidebar toggle ────────────────────────────────────────────
 const isMobile = () => window.innerWidth <= 640;
-
 function openSidebar() {
-  if (isMobile()) {
-    sidebar.classList.add('mobile-open');
-    sidebarOverlay.classList.add('show');
-    sidebarToggle.textContent = '✕';
-  } else {
-    sidebar.classList.remove('collapsed');
-    sidebarToggle.textContent = '☰';
-  }
+  if (isMobile()) { sidebar.classList.add('mobile-open'); sidebarOverlay.classList.add('show'); sidebarToggle.textContent = '✕'; }
+  else { sidebar.classList.remove('collapsed'); sidebarToggle.textContent = '☰'; }
 }
 function closeSidebar() {
-  if (isMobile()) {
-    sidebar.classList.remove('mobile-open');
-    sidebarOverlay.classList.remove('show');
-    sidebarToggle.textContent = '☰';
-  } else {
-    sidebar.classList.add('collapsed');
-    sidebarToggle.textContent = '▶';
-  }
+  if (isMobile()) { sidebar.classList.remove('mobile-open'); sidebarOverlay.classList.remove('show'); sidebarToggle.textContent = '☰'; }
+  else { sidebar.classList.add('collapsed'); sidebarToggle.textContent = '▶'; }
 }
 sidebarToggle.onclick = () => {
-  const mobileOpen  = sidebar.classList.contains('mobile-open');
-  const desktopOpen = !sidebar.classList.contains('collapsed');
-  if (isMobile()) { mobileOpen  ? closeSidebar() : openSidebar(); }
-  else            { desktopOpen ? closeSidebar() : openSidebar(); }
+  const mo = sidebar.classList.contains('mobile-open');
+  const do_ = !sidebar.classList.contains('collapsed');
+  if (isMobile()) { mo ? closeSidebar() : openSidebar(); } else { do_ ? closeSidebar() : openSidebar(); }
 };
 sidebarOverlay.onclick = closeSidebar;
 function closeSidebarOnMobile() { if (isMobile()) closeSidebar(); }
 
-// ── Workspace switcher ────────────────────────────────────────
+// ── Settings modal ────────────────────────────────────────────
+document.getElementById('gear-btn').onclick = openSettings;
+function openSettings() {
+  loadConnectorConfig();
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+function closeSettings() { document.getElementById('settings-modal').classList.add('hidden'); }
+document.getElementById('settings-modal').onclick = e => { if (e.target.id === 'settings-modal') closeSettings(); };
+
+async function loadConnectorConfig() {
+  try {
+    const d = await fetch(`${API}/connectors`).then(r => r.json());
+    const notion = d.connectors?.notion || {};
+    document.getElementById('notion-enabled').checked   = notion.enabled  || false;
+    document.getElementById('notion-workspace').value   = notion.workspace || 'Notion';
+    document.getElementById('notion-interval').value    = notion.poll_interval_minutes || 15;
+    // Don't prefill token (masked)
+  } catch {}
+}
+
+async function saveNotion() {
+  const token     = document.getElementById('notion-token').value.trim();
+  const workspace = document.getElementById('notion-workspace').value.trim() || 'Notion';
+  const enabled   = document.getElementById('notion-enabled').checked;
+  const interval  = parseInt(document.getElementById('notion-interval').value) || 15;
+
+  if (enabled && !token) { toast('❌ Enter your Notion integration token', true); return; }
+
+  try {
+    const d = await fetch(`${API}/connectors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connector: 'notion', enabled, token, workspace, poll_interval_minutes: interval })
+    }).then(r => r.json());
+    toast('✅ Notion connector saved');
+    // Add workspace to dropdown
+    if (workspace && ![...wsSelect.options].some(o => o.value === workspace)) {
+      const opt = document.createElement('option');
+      opt.value = workspace; opt.textContent = workspace;
+      wsSelect.appendChild(opt);
+    }
+    updateConnectorBar();
+  } catch { toast('❌ Could not save connector', true); }
+}
+
+async function syncNotion() {
+  const btn = document.getElementById('notion-sync-btn');
+  const sts = document.getElementById('notion-sync-status');
+  btn.disabled = true; sts.textContent = '🔄 Syncing Notion...';
+  try {
+    const d = await fetch(`${API}/connectors/notion/sync`, { method: 'POST' }).then(r => r.json());
+    if (d.error) { sts.textContent = `❌ ${d.error}`; toast(`❌ ${d.error}`, true); }
+    else {
+      sts.textContent = `✅ ${d.message}`;
+      toast(`✅ ${d.message}`);
+      loadFeed(); ping();
+    }
+  } catch { sts.textContent = '❌ Sync failed'; toast('❌ Sync failed', true); }
+  btn.disabled = false;
+}
+
+// ── Workspace ─────────────────────────────────────────────────
 async function loadWorkspaces() {
   try {
     const d = await fetch(`${API}/workspaces`).then(r => r.json());
@@ -615,38 +534,23 @@ async function loadWorkspaces() {
     });
   } catch {}
 }
-
 wsSelect.onchange = () => {
   currentWorkspace = wsSelect.value;
-  history = [];
-  clearFilesList();
-  loadFiles();
-  ping();
+  history = []; clearFilesList(); loadFiles(); ping();
 };
-
 newWsBtn.onclick = () => {
   const name = prompt('New workspace name (e.g. Work, Health, Finance):');
-  if (!name || !name.trim()) return;
-  const trimmed = name.trim();
-  fetch(`${API}/workspaces`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: trimmed })
-  }).then(r => r.json()).then(d => {
-    if (d.error) { toast(`❌ ${d.error}`, true); return; }
-    // Add to dropdown and select it
-    const opt = document.createElement('option');
-    opt.value = trimmed; opt.textContent = trimmed;
-    wsSelect.appendChild(opt);
-    wsSelect.value = trimmed;
-    currentWorkspace = trimmed;
-    history = [];
-    clearFilesList();
-    toast(`✅ Workspace "${trimmed}" created`);
-    ping();
-  }).catch(() => toast('❌ Could not create workspace', true));
+  if (!name?.trim()) return;
+  const n = name.trim();
+  fetch(`${API}/workspaces`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: n}) })
+    .then(r => r.json()).then(d => {
+      if (d.error) { toast(`❌ ${d.error}`, true); return; }
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n; wsSelect.appendChild(opt);
+      wsSelect.value = n; currentWorkspace = n;
+      history = []; clearFilesList(); toast(`✅ Workspace "${n}" created`); ping();
+    });
 };
-
 function clearFilesList() {
   docCount = 0; webCount = 0;
   document.getElementById('docs-count').textContent = '0';
@@ -655,7 +559,7 @@ function clearFilesList() {
   document.getElementById('web-list').innerHTML  = '<div class="section-empty" id="web-empty">No URLs indexed yet</div>';
 }
 
-// ── Model picker ──────────────────────────────────────────────
+// ── Model ─────────────────────────────────────────────────────
 modelSelect.onchange = () => { currentModel = modelSelect.value; };
 
 // ── Mode toggle ───────────────────────────────────────────────
@@ -663,55 +567,41 @@ modeBtn.onclick = () => {
   agentMode = !agentMode;
   modeBtn.className   = agentMode ? 'mode-btn agent' : 'mode-btn';
   modeBtn.textContent = agentMode ? '🌐 Agent' : '🔒 Vault';
-  modeBtn.title = agentMode
-    ? 'Agent mode ON — answers from your vault + live web search'
-    : 'Vault mode — answers from your indexed documents only';
-  qEl.placeholder = agentMode
-    ? 'Ask anything — searches your vault + the live web…'
-    : 'Ask anything about your documents…';
+  qEl.placeholder = agentMode ? 'Ask anything — searches vault + live web…' : 'Ask anything about your documents…';
 };
 
-// ── Setup Wizard ──────────────────────────────────────────────
+// ── Setup wizard ──────────────────────────────────────────────
 function setStep(id, state, text) {
-  const el  = document.getElementById(id);
-  const sts = document.getElementById(id + '-status');
-  el.className    = 'step ' + (state === 'done' ? 'done' : state === 'active' ? 'active' : '');
-  sts.textContent = text;
+  document.getElementById(id).className = 'step ' + (state === 'done' ? 'done' : state === 'active' ? 'active' : '');
+  document.getElementById(id + '-status').textContent = text;
 }
-
 async function checkSetup() {
   try {
-    const health = await fetch(`${API}/health`, { signal: AbortSignal.timeout(3000) }).then(r => r.json());
-    setStep('s-backend', 'done',   '✓ Running');
-    setStep('s-ollama',  health.ollama      ? 'done' : 'active', health.ollama      ? '✓ Ready' : '✗ Not found');
-    setStep('s-embed',   health.embed_model ? 'done' : 'active', health.embed_model ? '✓ Ready' : '✗ Missing');
-    setStep('s-llm',     health.chat_model  ? 'done' : 'active', health.chat_model  ? '✓ Ready' : '✗ Missing');
-    if (health.ready) {
+    const h = await fetch(`${API}/health`, {signal: AbortSignal.timeout(3000)}).then(r => r.json());
+    setStep('s-backend', 'done', '✓ Running');
+    setStep('s-ollama', h.ollama ? 'done' : 'active', h.ollama ? '✓ Ready' : '✗ Not found');
+    setStep('s-embed',  h.embed_model ? 'done' : 'active', h.embed_model ? '✓ Ready' : '✗ Missing');
+    setStep('s-llm',    h.chat_model  ? 'done' : 'active', h.chat_model  ? '✓ Ready' : '✗ Missing');
+    if (h.ready) {
       document.getElementById('setup-btn').textContent = '✓ Everything is ready — let\'s go';
       document.getElementById('setup-btn').disabled   = false;
       document.getElementById('setup-note').textContent = '';
       document.getElementById('setup-btn').onclick    = launchApp;
       setTimeout(launchApp, 1200);
-    } else {
-      document.getElementById('setup-btn').textContent = 'Run bash start.sh to continue';
-      setTimeout(checkSetup, 3000);
-    }
+    } else { document.getElementById('setup-btn').textContent = 'Run bash start.sh to continue'; setTimeout(checkSetup, 3000); }
   } catch {
     setStep('s-backend', 'active', 'Not running');
-    setStep('s-ollama',  '', 'Waiting…');
-    setStep('s-embed',   '', 'Waiting…');
-    setStep('s-llm',     '', 'Waiting…');
-    document.getElementById('setup-btn').textContent  = 'Run bash start.sh to continue';
+    ['s-ollama','s-embed','s-llm'].forEach(id => setStep(id, '', 'Waiting…'));
+    document.getElementById('setup-btn').textContent = 'Run bash start.sh to continue';
     document.getElementById('setup-note').textContent = 'Open Terminal, navigate to the vaultmind folder, and run: bash start.sh';
     setTimeout(checkSetup, 3000);
   }
 }
-
 function launchApp() {
   document.getElementById('setup-screen').style.display = 'none';
-  ping(); loadWorkspaces(); loadFiles();
+  ping(); loadWorkspaces(); loadFiles(); updateConnectorBar();
+  setInterval(loadFeed, 30000);  // refresh feed every 30s
 }
-
 checkSetup();
 
 // ── Status ping ───────────────────────────────────────────────
@@ -720,8 +610,7 @@ async function ping() {
     const d = await fetch(`${API}/status?workspace=${encodeURIComponent(currentWorkspace)}`).then(r => r.json());
     hstatus.className = 'hstatus ok';
     const ws = currentWorkspace === 'Default' ? '' : ` · ${currentWorkspace}`;
-    hstatus.querySelector('.stext').textContent =
-      d.chunks_indexed === 0 ? `Running${ws} — no docs yet` : `${d.chunks_indexed} chunks${ws}`;
+    hstatus.querySelector('.stext').textContent = d.chunks_indexed === 0 ? `Running${ws} — no docs yet` : `${d.chunks_indexed} chunks${ws}`;
     qEl.disabled = sendBtn.disabled = false;
   } catch {
     hstatus.className = 'hstatus warn';
@@ -730,7 +619,7 @@ async function ping() {
   }
 }
 
-// ── Load existing files ───────────────────────────────────────
+// ── Load files ────────────────────────────────────────────────
 async function loadFiles() {
   try {
     const d = await fetch(`${API}/files?workspace=${encodeURIComponent(currentWorkspace)}`).then(r => r.json());
@@ -738,18 +627,13 @@ async function loadFiles() {
   } catch {}
 }
 
-// ── File / URL ingestion ──────────────────────────────────────
+// ── Ingest ────────────────────────────────────────────────────
 const ACCEPTED = ['.pdf','.docx','.txt','.md','.csv'];
-
 zoneEl.onclick    = () => fileInp.click();
 zoneEl.ondragover = e => { e.preventDefault(); zoneEl.classList.add('over'); };
 zoneEl.ondragleave= () => zoneEl.classList.remove('over');
-zoneEl.ondrop     = e => {
-  e.preventDefault(); zoneEl.classList.remove('over');
-  const valid = [...e.dataTransfer.files].filter(f => ACCEPTED.some(ext => f.name.toLowerCase().endsWith(ext)));
-  ingest(valid);
-};
-fileInp.onchange = () => ingest([...fileInp.files]);
+zoneEl.ondrop     = e => { e.preventDefault(); zoneEl.classList.remove('over'); ingest([...e.dataTransfer.files].filter(f => ACCEPTED.some(x => f.name.toLowerCase().endsWith(x)))); };
+fileInp.onchange  = () => ingest([...fileInp.files]);
 
 const urlInput = document.getElementById('url-input');
 const urlBtn   = document.getElementById('url-btn');
@@ -758,18 +642,11 @@ urlInput.onkeydown = e => { if (e.key === 'Enter') ingestUrl(); };
 
 async function ingestUrl() {
   const url = urlInput.value.trim(); if (!url) return;
-  toast(`Fetching ${url}…`);
-  urlInput.value = ''; urlBtn.disabled = true;
+  toast(`Fetching ${url}…`); urlInput.value = ''; urlBtn.disabled = true;
   try {
-    const d = await fetch(`${API}/ingest-url`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, workspace: currentWorkspace })
-    }).then(r => r.json());
+    const d = await fetch(`${API}/ingest-url`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url, workspace: currentWorkspace}) }).then(r => r.json());
     if (d.error) throw new Error(d.error);
-    addFileCard(d.source, d.chunks);
-    toast(`✅ ${d.source} — ${d.chunks} chunks`);
-    ping();
+    addFileCard(d.source, d.chunks); toast(`✅ ${d.source} — ${d.chunks} chunks`); ping(); if (currentTab==='feed') loadFeed();
   } catch(e) { toast(`❌ ${e.message}`, true); }
   urlBtn.disabled = false;
 }
@@ -778,97 +655,112 @@ async function ingest(files) {
   for (const f of files) {
     toast(`Indexing ${f.name}…`);
     try {
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('workspace', currentWorkspace);
-      const d = await fetch(`${API}/upload`, { method: 'POST', body: fd }).then(r => r.json());
+      const fd = new FormData(); fd.append('file', f); fd.append('workspace', currentWorkspace);
+      const d = await fetch(`${API}/upload`, {method:'POST', body:fd}).then(r => r.json());
       if (d.error) throw new Error(d.error);
-      addFileCard(f.name, d.chunks);
-      toast(`✅ ${f.name} — ${d.chunks} chunks`);
-      ping();
+      addFileCard(f.name, d.chunks); toast(`✅ ${f.name} — ${d.chunks} chunks`); ping(); if (currentTab==='feed') loadFeed();
     } catch(e) { toast(`❌ ${e.message}`, true); }
   }
 }
 
-// ── Add file card to correct section ─────────────────────────
-function isWebSource(name) {
-  return name.startsWith('🌐') || name.startsWith('http://') || name.startsWith('https://');
+// ── File cards ────────────────────────────────────────────────
+function isWebSource(n) { return n.startsWith('🌐') || n.startsWith('http://') || n.startsWith('https://'); }
+function fileIcon(n) {
+  if (isWebSource(n)) return '🌐';
+  const ext = n.split('.').pop()?.toLowerCase();
+  return {pdf:'📄',docx:'📝',txt:'📝',md:'📝',csv:'📊'}[ext] || '📄';
 }
-
-function fileIcon(name) {
-  if (isWebSource(name)) return '🌐';
-  const ext = name.split('.').pop()?.toLowerCase();
-  return { pdf:'📄', docx:'📝', txt:'📝', md:'📝', csv:'📊' }[ext] || '📄';
+function friendlyName(n) {
+  if (n.startsWith('🌐')) return n.slice(2).trim();
+  try { const u = new URL(n); return u.hostname + (u.pathname !== '/' ? u.pathname : ''); } catch {}
+  return n;
 }
-
-function friendlyName(name) {
-  if (name.startsWith('🌐')) return name.slice(2).trim();
-  try {
-    const u = new URL(name);
-    return u.hostname + (u.pathname !== '/' ? u.pathname : '');
-  } catch {}
-  return name;
-}
-
-function updateCount(section, count) {
-  document.getElementById(section + '-count').textContent = count;
-}
+function updateCount(s, c) { document.getElementById(s+'-count').textContent = c; }
 
 function addFileCard(name, chunks) {
   const safeId = 'fc-' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'');
   if (document.getElementById(safeId)) return;
-
-  const isWeb   = isWebSource(name);
-  const listEl  = document.getElementById(isWeb ? 'web-list'  : 'docs-list');
-  const emptyEl = document.getElementById(isWeb ? 'web-empty' : 'docs-empty');
-
-  if (emptyEl) emptyEl.remove();
-
-  if (isWeb) { webCount++; updateCount('web', webCount); }
-  else        { docCount++; updateCount('docs', docCount); }
-
-  const icon       = fileIcon(name);
-  const label      = friendlyName(name);
-  const chunkLabel = chunks === 1 ? '1 chunk' : `${chunks} chunks`;
-
+  const isWeb  = isWebSource(name);
+  const listEl = document.getElementById(isWeb ? 'web-list' : 'docs-list');
+  const emEl   = document.getElementById(isWeb ? 'web-empty' : 'docs-empty');
+  if (emEl) emEl.remove();
+  if (isWeb) { webCount++; updateCount('web', webCount); } else { docCount++; updateCount('docs', docCount); }
   const el = document.createElement('div');
   el.className = 'file-card'; el.id = safeId;
-  el.innerHTML = `
-    <div class="card-icon">${icon}</div>
-    <div class="card-info">
-      <div class="card-name" title="${name}">${label}</div>
-      <div class="card-meta">${chunkLabel}</div>
-    </div>
-    <button class="card-del" title="Remove" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${isWeb ? 'web' : 'docs'}')">×</button>`;
+  el.innerHTML = `<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${friendlyName(name)}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${isWeb?'web':'docs'}')">×</button>`;
   listEl.appendChild(el);
 }
 
-async function deleteFile(encodedName, safeId, section) {
-  const name = decodeURIComponent(encodedName);
+async function deleteFile(enc, safeId, section) {
+  const name = decodeURIComponent(enc);
   if (!confirm(`Remove "${name}" from the index?`)) return;
   try {
-    const d = await fetch(`${API}/files/${encodedName}?workspace=${encodeURIComponent(currentWorkspace)}`, { method: 'DELETE' }).then(r => r.json());
+    const d = await fetch(`${API}/files/${enc}?workspace=${encodeURIComponent(currentWorkspace)}`, {method:'DELETE'}).then(r => r.json());
     if (d.error) throw new Error(d.error);
     document.getElementById(safeId)?.remove();
-    if (section === 'web') {
-      webCount = Math.max(0, webCount - 1); updateCount('web', webCount);
-      if (webCount === 0) {
-        const el = document.createElement('div');
-        el.className = 'section-empty'; el.id = 'web-empty';
-        el.textContent = 'No URLs indexed yet';
-        document.getElementById('web-list').appendChild(el);
-      }
-    } else {
-      docCount = Math.max(0, docCount - 1); updateCount('docs', docCount);
-      if (docCount === 0) {
-        const el = document.createElement('div');
-        el.className = 'section-empty'; el.id = 'docs-empty';
-        el.textContent = 'No documents indexed yet';
-        document.getElementById('docs-list').appendChild(el);
-      }
-    }
-    toast(`🗑️ Removed`); ping();
+    if (section === 'web') { webCount = Math.max(0,webCount-1); updateCount('web',webCount); if (!webCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='web-empty'; e.textContent='No URLs indexed yet'; document.getElementById('web-list').appendChild(e); } }
+    else { docCount = Math.max(0,docCount-1); updateCount('docs',docCount); if (!docCount) { const e=document.createElement('div'); e.className='section-empty'; e.id='docs-empty'; e.textContent='No documents indexed yet'; document.getElementById('docs-list').appendChild(e); } }
+    toast('🗑️ Removed'); ping();
   } catch(e) { toast(`❌ ${e.message}`, true); }
+}
+
+// ── Feed ──────────────────────────────────────────────────────
+const CONNECTOR_ICONS = { notion:'📓', gmail:'📧', slack:'💬', whatsapp:'🟢', upload:'📂', url:'🌐', manual:'📄' };
+
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso)) / 1000;
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+async function loadFeed() {
+  try {
+    const d      = await fetch(`${API}/feed?limit=50`).then(r => r.json());
+    const events = d.events || [];
+    const list   = document.getElementById('feed-list');
+
+    // Remove old items (keep header + connector bar + empty state structure)
+    [...list.querySelectorAll('.feed-item')].forEach(el => el.remove());
+    document.getElementById('feed-empty').style.display = events.length ? 'none' : 'flex';
+
+    events.forEach(ev => {
+      const icon = CONNECTOR_ICONS[ev.connector] || '📄';
+      const el   = document.createElement('div');
+      el.className = 'feed-item';
+      el.innerHTML = `
+        <div class="feed-item-icon">${icon}</div>
+        <div class="feed-item-body">
+          <div class="feed-item-title">${ev.title}</div>
+          <div class="feed-item-meta">
+            <span class="feed-ws-badge">${ev.workspace}</span>
+            <span class="feed-source-badge">${ev.connector}</span>
+            <span class="feed-chunks">${ev.chunks} chunks</span>
+            <span class="feed-time">${timeAgo(ev.timestamp)}</span>
+          </div>
+        </div>`;
+      list.appendChild(el);
+    });
+  } catch {}
+}
+
+async function updateConnectorBar() {
+  try {
+    const d   = await fetch(`${API}/connectors`).then(r => r.json());
+    const bar = document.getElementById('connector-bar');
+    bar.innerHTML = '';
+    const connectors = d.connectors || {};
+    const all = [{id:'notion',label:'Notion',icon:'📓'},{id:'gmail',label:'Gmail',icon:'📧'},{id:'slack',label:'Slack',icon:'💬'}];
+    all.forEach(c => {
+      const cfg    = connectors[c.id] || {};
+      const active = cfg.enabled === true;
+      const badge  = document.createElement('div');
+      badge.className = `connector-badge ${active ? 'active' : ''}`;
+      badge.innerHTML = `<span class="dot"></span>${c.icon} ${c.label}`;
+      bar.appendChild(badge);
+    });
+  } catch {}
 }
 
 // ── Chat ──────────────────────────────────────────────────────
@@ -889,97 +781,43 @@ async function ask() {
   msgsEl.appendChild(botEl); msgsEl.scrollTop = msgsEl.scrollHeight;
 
   let statusEl = null;
-  if (agentMode) {
-    statusEl = document.createElement('div');
-    statusEl.className = 'status-msg';
-    statusEl.textContent = '🔍 Starting agent…';
-    msgsEl.insertBefore(statusEl, botEl);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
+  if (agentMode) { statusEl = document.createElement('div'); statusEl.className='status-msg'; statusEl.textContent='🔍 Starting agent…'; msgsEl.insertBefore(statusEl, botEl); msgsEl.scrollTop = msgsEl.scrollHeight; }
 
   let fullText = '';
   try {
-    const endpoint = agentMode ? `${API}/agent` : `${API}/chat`;
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message:   text,
-        history,
-        workspace: currentWorkspace,
-        model:     currentModel
-      })
+    const res = await fetch(agentMode ? `${API}/agent` : `${API}/chat`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: text, history, workspace: currentWorkspace, model: currentModel })
     });
-    const reader = res.body.getReader();
-    const dec    = new TextDecoder();
-    let   buf    = '';
-
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     while (true) {
-      const { done, value } = await reader.read(); if (done) break;
-      buf += dec.decode(value, { stream: true });
+      const {done, value} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
       const lines = buf.split('\n'); buf = lines.pop() || '';
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         try {
           const data = JSON.parse(line.slice(6));
-          if (data.status) {
-            if (statusEl) statusEl.textContent = data.status;
-            msgsEl.scrollTop = msgsEl.scrollHeight;
-          }
-          if (data.token) {
-            if (statusEl) { statusEl.remove(); statusEl = null; }
-            fullText += data.token;
-            bubble.textContent = stripMarkdown(fullText);
-            bubble.appendChild(cursor);
-            msgsEl.scrollTop = msgsEl.scrollHeight;
-          }
+          if (data.status) { if (statusEl) statusEl.textContent = data.status; msgsEl.scrollTop = msgsEl.scrollHeight; }
+          if (data.token) { if (statusEl) { statusEl.remove(); statusEl=null; } fullText += data.token; bubble.textContent = stripMarkdown(fullText); bubble.appendChild(cursor); msgsEl.scrollTop = msgsEl.scrollHeight; }
           if (data.done) {
             cursor.remove();
-            if (data.sources?.length) {
-              const s = document.createElement('div');
-              s.className = 'src';
-              s.textContent = 'Sources: ' + data.sources.join(', ');
-              botEl.appendChild(s);
-            }
-            history.push({ role: 'user',      content: text     });
-            history.push({ role: 'assistant', content: fullText });
+            if (data.sources?.length) { const s=document.createElement('div'); s.className='src'; s.textContent='Sources: '+data.sources.join(', '); botEl.appendChild(s); }
+            history.push({role:'user',content:text}); history.push({role:'assistant',content:fullText});
             if (history.length > 12) history = history.slice(-12);
           }
         } catch {}
       }
     }
-  } catch {
-    cursor.remove();
-    bubble.textContent = 'Connection error — is VaultMind running?';
-  }
-  busy = false; qEl.disabled = sendBtn.disabled = false;
-  qEl.focus(); msgsEl.scrollTop = msgsEl.scrollHeight;
+  } catch { cursor.remove(); bubble.textContent = 'Connection error — is VaultMind running?'; }
+  busy = false; qEl.disabled = sendBtn.disabled = false; qEl.focus(); msgsEl.scrollTop = msgsEl.scrollHeight;
 }
 
-// ── Strip markdown from model output ─────────────────────────
-function stripMarkdown(text) {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^[\-\*]\s+/gm, '• ')
-    .replace(/^(\d+)\.\s+/gm, '$1. ')
-    .replace(/`{1,3}([^`]*)`{1,3}/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .trim();
+function stripMarkdown(t) {
+  return t.replace(/\*\*(.+?)\*\*/g,'$1').replace(/\*(.+?)\*/g,'$1').replace(/^#{1,6}\s+/gm,'').replace(/^[\-\*]\s+/gm,'• ').replace(/^(\d+)\.\s+/gm,'$1. ').replace(/`{1,3}([^`]*)`{1,3}/g,'$1').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').trim();
 }
-
-function addUserMsg(text) {
-  const d = document.createElement('div');
-  d.className = 'msg-user'; d.textContent = text;
-  msgsEl.appendChild(d); msgsEl.scrollTop = msgsEl.scrollHeight;
-}
-
-function toast(msg, err = false) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
-  setTimeout(() => t.className = 'toast', 3500);
-}
+function addUserMsg(t) { const d=document.createElement('div'); d.className='msg-user'; d.textContent=t; msgsEl.appendChild(d); msgsEl.scrollTop=msgsEl.scrollHeight; }
+function toast(msg, err=false) { const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(err?' err':''); setTimeout(()=>t.className='toast',3500); }
 </script>
 </body>
 </html>

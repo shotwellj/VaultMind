@@ -3,18 +3,199 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
+import asyncio
 import os
-import chromadb
-import ollama
-import pypdf
+import uuid
 import json
 import io
 import requests
+import chromadb
+import ollama
+import pypdf
 from docx import Document
 from bs4 import BeautifulSoup
 from ddgs import DDGS
+from datetime import datetime, timezone
 
-app = FastAPI()
+# ── Config / Feed file paths ──────────────────────────────────
+BASE_DIR    = os.path.dirname(__file__)
+CONFIG_FILE = os.path.join(BASE_DIR, "connector_config.json")
+FEED_FILE   = os.path.join(BASE_DIR, "feed_events.json")
+
+# ── Connector config helpers ──────────────────────────────────
+
+def load_config() -> dict:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_config(config: dict):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+# ── Feed event helpers ────────────────────────────────────────
+
+def load_feed() -> list:
+    if os.path.exists(FEED_FILE):
+        try:
+            with open(FEED_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_feed(events: list):
+    with open(FEED_FILE, "w") as f:
+        json.dump(events, f, indent=2)
+
+def log_feed_event(title: str, workspace: str, chunks: int, connector: str = "manual", source_id: str = ""):
+    events = load_feed()
+    events.insert(0, {
+        "id":        str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "title":     title,
+        "workspace": workspace,
+        "chunks":    chunks,
+        "connector": connector,
+        "source_id": source_id,
+    })
+    save_feed(events[:300])  # keep last 300 events
+
+# ── Notion sync ───────────────────────────────────────────────
+
+def get_notion_title(page: dict) -> str:
+    props = page.get("properties", {})
+    for key in ["title", "Title", "Name", "name"]:
+        if key in props:
+            tp = props[key]
+            if tp.get("type") == "title":
+                return "".join(rt.get("plain_text", "") for rt in tp.get("title", []))
+    return "Untitled"
+
+def extract_block_text(block: dict) -> str:
+    btype = block.get("type", "")
+    rich  = block.get(btype, {}).get("rich_text", [])
+    return "".join(rt.get("plain_text", "") for rt in rich)
+
+def get_notion_page_text(page_id: str, headers: dict) -> str:
+    try:
+        r = requests.get(
+            f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100",
+            headers=headers, timeout=12
+        )
+        blocks = r.json().get("results", [])
+        lines  = [extract_block_text(b) for b in blocks if extract_block_text(b)]
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"Notion block fetch error: {e}")
+        return ""
+
+def sync_notion_now(notion_cfg: dict):
+    token     = notion_cfg.get("token", "")
+    workspace = notion_cfg.get("workspace", "Notion")
+    if not token:
+        return 0
+
+    headers = {
+        "Authorization":  f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type":   "application/json",
+    }
+
+    try:
+        r = requests.post(
+            "https://api.notion.com/v1/search",
+            headers=headers,
+            json={"filter": {"value": "page", "property": "object"}, "page_size": 100},
+            timeout=12
+        )
+        pages = r.json().get("results", [])
+    except Exception as e:
+        print(f"Notion search error: {e}")
+        return 0
+
+    col   = get_collection(workspace)
+    synced = 0
+
+    for page in pages:
+        page_id = page["id"].replace("-", "")
+        title   = get_notion_title(page)
+        source  = f"notion:{page_id}"
+
+        # Skip if already indexed
+        existing = col.get(where={"source": source}, include=["metadatas"])
+        if existing["ids"]:
+            continue
+
+        text = get_notion_page_text(page["id"], headers)
+        if not text.strip():
+            continue
+
+        chunks = chunk_text(text)
+        print(f"  📓 Notion: indexing '{title}' ({len(chunks)} chunks)")
+        embed_and_store(chunks, source, col)
+        log_feed_event(title, workspace, len(chunks), "notion", source)
+        synced += 1
+
+    # Update last synced timestamp
+    cfg = load_config()
+    if "notion" not in cfg:
+        cfg["notion"] = {}
+    cfg["notion"]["last_synced"] = datetime.now(timezone.utc).isoformat()
+    cfg["notion"]["pages_synced"] = (cfg["notion"].get("pages_synced", 0) + synced)
+    save_config(cfg)
+    print(f"✅ Notion sync complete — {synced} new pages indexed")
+    return synced
+
+# ── Background polling loop ───────────────────────────────────
+
+async def polling_loop():
+    """Runs in the background, polling connectors on their configured intervals."""
+    print("🔄 Connector polling started")
+    while True:
+        try:
+            cfg = load_config()
+
+            # Notion
+            notion = cfg.get("notion", {})
+            if notion.get("enabled") and notion.get("token"):
+                interval_min = notion.get("poll_interval_minutes", 15)
+                last_synced  = notion.get("last_synced")
+                should_sync  = True
+                if last_synced:
+                    try:
+                        last_dt  = datetime.fromisoformat(last_synced)
+                        elapsed  = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60
+                        should_sync = elapsed >= interval_min
+                    except Exception:
+                        pass
+                if should_sync:
+                    print("🔄 Polling Notion...")
+                    await asyncio.to_thread(sync_notion_now, notion)
+
+        except Exception as e:
+            print(f"Polling loop error: {e}")
+
+        await asyncio.sleep(60)  # check every minute
+
+# ── App lifespan (starts background polling) ──────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(polling_loop())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,14 +205,14 @@ app.add_middleware(
 )
 
 # ── Serve frontend ────────────────────────────────────────────
-FRONTEND_DIR  = os.path.join(os.path.dirname(__file__), "..", "frontend")
+FRONTEND_DIR  = os.path.join(BASE_DIR, "..", "frontend")
 FRONTEND_FILE = os.path.join(FRONTEND_DIR, "index.html")
 
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
     if os.path.exists(FRONTEND_FILE):
         return FileResponse(FRONTEND_FILE)
-    return {"message": "VaultMind API running. Frontend not found at ../frontend/index.html"}
+    return {"message": "VaultMind API running. Frontend not found."}
 
 @app.get("/manifest.json", include_in_schema=False)
 async def serve_manifest():
@@ -43,98 +224,78 @@ async def serve_manifest():
 # ── ChromaDB ──────────────────────────────────────────────────
 chroma = chromadb.PersistentClient(path="./chroma_db")
 
-EMBED_MODEL    = "nomic-embed-text"
-DEFAULT_MODEL  = "mistral"
+EMBED_MODEL   = "nomic-embed-text"
+DEFAULT_MODEL = "mistral"
 
 AVAILABLE_MODELS = [
-    {"id": "mistral",       "label": "Mistral 7B"},
-    {"id": "llama3.2",      "label": "Llama 3.2"},
-    {"id": "phi3",          "label": "Phi-3 Mini"},
-    {"id": "gemma2",        "label": "Gemma 2"},
-    {"id": "qwen2.5",       "label": "Qwen 2.5"},
-    {"id": "deepseek-r1",   "label": "DeepSeek R1"},
+    {"id": "mistral",     "label": "Mistral 7B"},
+    {"id": "llama3.2",    "label": "Llama 3.2"},
+    {"id": "phi3",        "label": "Phi-3 Mini"},
+    {"id": "gemma2",      "label": "Gemma 2"},
+    {"id": "qwen2.5",     "label": "Qwen 2.5"},
+    {"id": "deepseek-r1", "label": "DeepSeek R1"},
 ]
 
 # ── Workspace helpers ─────────────────────────────────────────
 
 def collection_name(workspace: str) -> str:
-    """Map a workspace display name to a ChromaDB collection name."""
     if not workspace or workspace.strip().lower() in ("default", ""):
-        return "vaultmind_docs"   # backward-compatible with Phase 1 data
+        return "vaultmind_docs"
     safe = workspace.strip().lower().replace(" ", "_").replace("-", "_")
     return f"vaultmind_{safe}"
 
-
 def get_collection(workspace: str = "Default"):
-    """Return (or create) the ChromaDB collection for a workspace."""
     return chroma.get_or_create_collection(collection_name(workspace))
 
-
 def workspace_from_collection(col_name: str) -> str:
-    """Convert a ChromaDB collection name back to a workspace display name."""
     if col_name == "vaultmind_docs":
         return "Default"
     if col_name.startswith("vaultmind_"):
         return col_name[len("vaultmind_"):].replace("_", " ").title()
     return col_name
 
-
 # ── Workspaces API ────────────────────────────────────────────
 
 @app.get("/workspaces")
 async def list_workspaces():
-    """Return all workspace names."""
     try:
-        cols = chroma.list_collections()
-        names = [
-            workspace_from_collection(c.name)
-            for c in cols
-            if c.name == "vaultmind_docs" or c.name.startswith("vaultmind_")
-        ]
+        cols  = chroma.list_collections()
+        names = [workspace_from_collection(c.name) for c in cols
+                 if c.name == "vaultmind_docs" or c.name.startswith("vaultmind_")]
     except Exception:
         names = []
     if not names:
         names = ["Default"]
-    # Always put Default first
     if "Default" in names:
         names = ["Default"] + [n for n in names if n != "Default"]
     return {"workspaces": names}
-
 
 class WorkspaceCreate(BaseModel):
     name: str
 
 @app.post("/workspaces")
 async def create_workspace(data: WorkspaceCreate):
-    """Create a new workspace."""
     name = data.name.strip()
     if not name:
         return {"error": "Workspace name cannot be empty"}
-    get_collection(name)   # creates collection if it doesn't exist
+    get_collection(name)
     return {"message": f"Workspace '{name}' created", "name": name}
-
 
 # ── Models API ────────────────────────────────────────────────
 
 @app.get("/models")
 async def list_models():
-    """Return available models and which ones are already pulled locally."""
     try:
         pulled_raw   = ollama.list()
         pulled_names = [m.model for m in pulled_raw.models]
     except Exception:
         pulled_names = []
-    models = []
-    for m in AVAILABLE_MODELS:
-        is_available = any(m["id"] in p for p in pulled_names)
-        models.append({**m, "available": is_available})
+    models = [{**m, "available": any(m["id"] in p for p in pulled_names)} for m in AVAILABLE_MODELS]
     return {"models": models, "default": DEFAULT_MODEL}
-
 
 # ── Text helpers ──────────────────────────────────────────────
 
 def chunk_text(text: str, chunk_size: int = 150) -> list[str]:
-    """Split text into overlapping chunks for precise retrieval."""
     words  = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - 20):
@@ -143,9 +304,7 @@ def chunk_text(text: str, chunk_size: int = 150) -> list[str]:
             chunks.append(chunk)
     return chunks
 
-
 def extract_text_from_file(contents: bytes, filename: str) -> str:
-    """Extract plain text from any supported file type."""
     name = filename.lower()
     if name.endswith(".pdf"):
         reader = pypdf.PdfReader(io.BytesIO(contents))
@@ -159,9 +318,7 @@ def extract_text_from_file(contents: bytes, filename: str) -> str:
         return contents.decode("utf-8", errors="ignore")
     return ""
 
-
 def embed_and_store(chunks: list[str], source: str, col):
-    """Embed chunks and upsert into a ChromaDB collection."""
     for i, chunk in enumerate(chunks):
         embedding = ollama.embeddings(model=EMBED_MODEL, prompt=chunk)["embedding"]
         col.upsert(
@@ -173,7 +330,6 @@ def embed_and_store(chunks: list[str], source: str, col):
         if i % 10 == 0:
             print(f"  ✓ {i}/{len(chunks)}")
 
-
 # ── Upload ────────────────────────────────────────────────────
 
 @app.post("/upload")
@@ -181,7 +337,6 @@ async def upload_document(
     file:      UploadFile = File(...),
     workspace: str        = Form(default="Default")
 ):
-    """Ingest a file into the specified workspace."""
     contents = await file.read()
     text     = extract_text_from_file(contents, file.filename)
     if not text.strip():
@@ -190,9 +345,8 @@ async def upload_document(
     print(f"\n📄 [{workspace}] Indexing '{file.filename}' — {len(chunks)} chunks")
     col = get_collection(workspace)
     embed_and_store(chunks, file.filename, col)
-    print(f"✅ Done: '{file.filename}'")
+    log_feed_event(file.filename, workspace, len(chunks), "upload")
     return {"message": f"Indexed {file.filename}", "chunks": len(chunks)}
-
 
 # ── URL ingest ────────────────────────────────────────────────
 
@@ -202,38 +356,23 @@ class UrlIngest(BaseModel):
 
 @app.post("/ingest-url")
 async def ingest_url(data: UrlIngest):
-    """Scrape a URL and index its content into the specified workspace."""
-    BLOCKED_DOMAINS = ["indeed.com", "linkedin.com", "ziprecruiter.com", "glassdoor.com"]
-    if any(d in data.url for d in BLOCKED_DOMAINS):
-        return {
-            "error": (
-                "This site blocks scrapers. Try these instead:\n"
-                "• Company career pages directly (e.g. greenhouse.io, lever.co, workday.com)\n"
-                "• Google: https://www.google.com/search?q=data+engineer+jobs+irvine+ca\n"
-                "• Builtin: https://builtin.com/jobs/data-engineer\n"
-                "• Wellfound (AngelList): https://wellfound.com/jobs"
-            )
-        }
+    BLOCKED = ["indeed.com", "linkedin.com", "ziprecruiter.com", "glassdoor.com"]
+    if any(d in data.url for d in BLOCKED):
+        return {"error": "This site blocks scrapers. Try company career pages, Builtin, or Wellfound instead."}
     try:
-        r = requests.get(
-            data.url, timeout=15,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate, br",
-                "DNT": "1",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-            }
-        )
+        r = requests.get(data.url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "DNT": "1",
+        })
         if r.status_code == 403:
-            return {"error": "This site blocks scrapers (403 Forbidden). Try the company's direct careers page instead."}
+            return {"error": "This site blocks scrapers (403). Try the company's direct careers page."}
         if r.status_code == 429:
-            return {"error": "Rate limited (429). Wait a minute and try again, or use a different URL."}
+            return {"error": "Rate limited (429). Wait a minute and try again."}
         r.raise_for_status()
     except requests.exceptions.Timeout:
-        return {"error": "Request timed out. The site may be slow or blocking requests."}
+        return {"error": "Request timed out."}
     except Exception as e:
         return {"error": f"Could not fetch URL: {str(e)}"}
 
@@ -247,18 +386,15 @@ async def ingest_url(data: UrlIngest):
 
     source = f"🌐 {title[:80]}"
     chunks = chunk_text(text)
-    print(f"\n🌐 [{data.workspace}] Indexing '{title}' — {len(chunks)} chunks")
-    col = get_collection(data.workspace)
+    col    = get_collection(data.workspace)
     embed_and_store(chunks, source, col)
-    print(f"✅ Done: '{title}'")
+    log_feed_event(title, data.workspace, len(chunks), "url")
     return {"message": f"Indexed {title}", "chunks": len(chunks), "source": source}
 
-
-# ── Files list / delete ───────────────────────────────────────
+# ── Files ─────────────────────────────────────────────────────
 
 @app.get("/files")
 async def list_files(workspace: str = Query(default="Default")):
-    """List all indexed sources in the specified workspace."""
     col     = get_collection(workspace)
     results = col.get(include=["metadatas"])
     files   = {}
@@ -267,19 +403,82 @@ async def list_files(workspace: str = Query(default="Default")):
         files[src] = files.get(src, 0) + 1
     return {"files": [{"name": k, "chunks": v} for k, v in files.items()]}
 
-
 @app.delete("/files/{filename}")
 async def delete_file(filename: str, workspace: str = Query(default="Default")):
-    """Remove a source from the specified workspace."""
     col     = get_collection(workspace)
     results = col.get(where={"source": filename}, include=["metadatas"])
     ids     = results["ids"]
     if not ids:
         return {"error": "File not found"}
     col.delete(ids=ids)
-    print(f"🗑️  [{workspace}] Deleted '{filename}' ({len(ids)} chunks)")
     return {"message": f"Deleted {filename}", "chunks_removed": len(ids)}
 
+# ── Feed API ──────────────────────────────────────────────────
+
+@app.get("/feed")
+async def get_feed(limit: int = Query(default=50)):
+    """Return recent feed events from all connectors and manual uploads."""
+    events = load_feed()
+    return {"events": events[:limit]}
+
+# ── Connectors API ────────────────────────────────────────────
+
+@app.get("/connectors")
+async def get_connectors():
+    """Return current connector configurations (tokens masked)."""
+    cfg    = load_config()
+    result = {}
+    for name, conf in cfg.items():
+        masked = {k: ("***" if "token" in k or "key" in k or "secret" in k else v)
+                  for k, v in conf.items()}
+        result[name] = masked
+    return {"connectors": result}
+
+class ConnectorConfig(BaseModel):
+    connector:             str
+    enabled:               bool  = True
+    token:                 str   = ""
+    workspace:             str   = ""
+    poll_interval_minutes: int   = 15
+
+@app.post("/connectors")
+async def save_connector(data: ConnectorConfig):
+    """Save connector configuration."""
+    cfg = load_config()
+    if data.connector not in cfg:
+        cfg[data.connector] = {}
+    cfg[data.connector].update({
+        "enabled":               data.enabled,
+        "token":                 data.token,
+        "workspace":             data.workspace or data.connector.title(),
+        "poll_interval_minutes": data.poll_interval_minutes,
+    })
+    save_config(cfg)
+    # Ensure workspace collection exists
+    if data.workspace:
+        get_collection(data.workspace)
+    return {"message": f"{data.connector} connector saved"}
+
+@app.post("/connectors/{connector}/sync")
+async def manual_sync(connector: str):
+    """Trigger an immediate manual sync for a connector."""
+    cfg = load_config()
+    if connector == "notion":
+        notion_cfg = cfg.get("notion", {})
+        if not notion_cfg.get("token"):
+            return {"error": "Notion token not configured"}
+        synced = await asyncio.to_thread(sync_notion_now, notion_cfg)
+        return {"message": f"Notion sync complete — {synced} new pages indexed", "synced": synced}
+    return {"error": f"Unknown connector: {connector}"}
+
+@app.delete("/connectors/{connector}")
+async def delete_connector(connector: str):
+    """Remove a connector configuration."""
+    cfg = load_config()
+    if connector in cfg:
+        del cfg[connector]
+        save_config(cfg)
+    return {"message": f"{connector} connector removed"}
 
 # ── Chat ──────────────────────────────────────────────────────
 
@@ -288,7 +487,6 @@ class ChatMessage(BaseModel):
     history:   list[dict] = []
     workspace: str = "Default"
     model:     str = "mistral"
-
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
@@ -311,14 +509,12 @@ async def chat(msg: ChatMessage):
             "role": "system",
             "content": (
                 "You are a personal AI assistant. You have access ONLY to documents the user has explicitly indexed.\n\n"
-                "STRICT RULES — follow these without exception:\n"
-                "1. NEVER invent, fabricate, or guess information. No fake names, emails, phone numbers, job listings, companies, or URLs.\n"
-                "2. ONLY use information that is literally present in the documents below.\n"
-                "3. If the user asks for real-world data (live job listings, real candidate profiles, company contacts) that is NOT in the documents, respond with exactly this format:\n"
-                "   'I don't have that data indexed. To get real results, paste the relevant URLs into VaultMind (e.g. a LinkedIn search page, a job board, a company careers page) and I can answer from that real data.'\n"
-                "4. Never present strategies or instructions as if they are actual results. If you can only suggest a strategy, say clearly: 'I can suggest a strategy, but I don't have real data for this. Here is what to do to get it:'\n"
-                "5. Be concise and direct. Do not pad responses.\n"
-                "6. Write in plain prose only. NO markdown formatting — no bold (**text**), no headers (##), no bullet points, no dashes as list items. Just clean sentences and paragraphs.\n\n"
+                "STRICT RULES:\n"
+                "1. NEVER invent, fabricate, or guess information.\n"
+                "2. ONLY use information literally present in the documents below.\n"
+                "3. If the answer isn't in the documents, say so clearly.\n"
+                "4. Be concise and direct.\n"
+                "5. Write in plain prose only. NO markdown — no bold, no headers, no bullet dashes.\n\n"
                 f"INDEXED DOCUMENTS:\n{context}"
             )
         }
@@ -335,44 +531,30 @@ async def chat(msg: ChatMessage):
                 yield f"data: {json.dumps({'token': token})}\n\n"
         yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
-
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 # ── Status / Health ───────────────────────────────────────────
 
 @app.get("/status")
 async def status(workspace: str = Query(default="Default")):
-    """Return chunk count for the given workspace."""
     try:
-        col   = get_collection(workspace)
-        count = col.count()
+        count = get_collection(workspace).count()
     except Exception:
         count = 0
     return {"chunks_indexed": count, "status": "running", "workspace": workspace}
 
-
 @app.get("/health")
 async def health():
     try:
-        models_raw  = ollama.list()
-        model_names = [m.model for m in models_raw.models]
+        model_names = [m.model for m in ollama.list().models]
         has_embed   = any("nomic-embed-text" in m for m in model_names)
-        has_llm     = any(
-            any(x in m for x in ["mistral", "llama3", "phi3", "gemma", "qwen", "deepseek"])
-            for m in model_names
-        )
+        has_llm     = any(any(x in m for x in ["mistral", "llama3", "phi3", "gemma", "qwen", "deepseek"]) for m in model_names)
         return {"ollama": True, "embed_model": has_embed, "chat_model": has_llm, "ready": has_embed and has_llm}
     except Exception:
         return {"ollama": False, "embed_model": False, "chat_model": False, "ready": False}
 
-
-# ─────────────────────────────────────────────────────────────
-#  QUERY — non-streaming endpoint for programmatic use
-# ─────────────────────────────────────────────────────────────
+# ── Query (non-streaming) ─────────────────────────────────────
 
 class QueryMessage(BaseModel):
     message:   str
@@ -382,72 +564,49 @@ class QueryMessage(BaseModel):
 
 @app.post("/query")
 async def query(msg: QueryMessage):
-    """Synchronous JSON endpoint for OpenClaw, scripts, and integrations."""
     try:
         col        = get_collection(msg.workspace)
         chat_model = msg.model or DEFAULT_MODEL
         q_emb      = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
 
+        RELEVANCE_THRESHOLD = 0.75
         vault_context = ""
         vault_sources = []
-        RELEVANCE_THRESHOLD = 0.75
         v = col.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
         if v["documents"][0]:
-            relevant_docs = []
-            relevant_meta = []
+            rel_docs, rel_meta = [], []
             for doc, meta, dist in zip(v["documents"][0], v["metadatas"][0], v["distances"][0]):
                 if dist < RELEVANCE_THRESHOLD:
-                    relevant_docs.append(doc)
-                    relevant_meta.append(meta)
-            if relevant_docs:
-                vault_context = "\n\n".join(relevant_docs)
-                vault_sources = list(set(m["source"] for m in relevant_meta))
+                    rel_docs.append(doc); rel_meta.append(meta)
+            if rel_docs:
+                vault_context = "\n\n".join(rel_docs)
+                vault_sources = list(set(m["source"] for m in rel_meta))
 
         web_context = ""
         web_sources = []
         if msg.mode == "agent":
-            hits = web_search(msg.message, max_results=4)
-            for r in hits[:3]:
-                text = smart_scrape(r.get("href", ""), max_chars=1500)
+            for hit in web_search(msg.message, 4)[:3]:
+                text = smart_scrape(hit.get("href", ""), 1500)
                 if text:
-                    web_context += f"\n\nSource: {r.get('title','')}\nURL: {r.get('href','')}\n{text}"
-                    web_sources.append(r.get("title", r.get("href", "")))
+                    web_context += f"\n\nSource: {hit.get('title','')}\n{text}"
+                    web_sources.append(hit.get("title", hit.get("href", "")))
 
         sections = []
-        if vault_context:
-            sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
-        if web_context:
-            sections.append(f"FROM THE WEB:\n{web_context}")
+        if vault_context: sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
+        if web_context:   sections.append(f"FROM THE WEB:\n{web_context}")
         if not sections:
-            return {"answer": "I don't have any relevant information indexed for that question. Try adding documents or URLs in VaultMind first.", "sources": []}
+            return {"answer": "No relevant information indexed for that question.", "sources": []}
 
-        full_context = "\n\n---\n\n".join(sections)
-        response = ollama.chat(
-            model=chat_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a personal AI assistant. Answer the question using ONLY the sources below.\n"
-                        "NEVER invent information. If the answer isn't in the sources, say so clearly.\n"
-                        "Be concise and direct. Plain prose only — no markdown formatting.\n\n"
-                        f"SOURCES:\n{full_context}"
-                    )
-                },
-                {"role": "user", "content": msg.message}
-            ],
-            options={"temperature": 0}
-        )
-        answer = response["message"]["content"]
-        return {"answer": answer, "sources": vault_sources + web_sources, "mode": msg.mode}
+        response = ollama.chat(model=chat_model, messages=[
+            {"role": "system", "content": f"Answer using ONLY the sources below. No markdown.\n\nSOURCES:\n{chr(10).join(sections)}"},
+            {"role": "user", "content": msg.message}
+        ], options={"temperature": 0})
+        return {"answer": response["message"]["content"], "sources": vault_sources + web_sources, "mode": msg.mode}
 
     except Exception as e:
         return {"error": str(e), "answer": "VaultMind encountered an error. Is Ollama running?"}
 
-
-# ─────────────────────────────────────────────────────────────
-#  AGENT LAYER — vault + live web search
-# ─────────────────────────────────────────────────────────────
+# ── Agent (streaming) ─────────────────────────────────────────
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -456,40 +615,31 @@ BROWSER_HEADERS = {
     "DNT": "1",
 }
 
-
 def web_search(query: str, max_results: int = 6) -> list[dict]:
     try:
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
-        print(f"Search error: {e}")
-        return []
-
+        print(f"Search error: {e}"); return []
 
 def smart_scrape(url: str, max_chars: int = 2000) -> str:
     BLOCKED = ["linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com"]
-    if any(d in url for d in BLOCKED):
-        return ""
+    if any(d in url for d in BLOCKED): return ""
     try:
         r = requests.get(url, timeout=8, headers=BROWSER_HEADERS)
-        if r.status_code != 200:
-            return ""
+        if r.status_code != 200: return ""
         soup = BeautifulSoup(r.content, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
             tag.decompose()
         return soup.get_text(separator="\n", strip=True)[:max_chars]
-    except Exception:
-        return ""
-
+    except Exception: return ""
 
 @app.post("/agent")
 async def agent(msg: ChatMessage):
-    """Agent mode: vault search + live web search, streamed."""
     col        = get_collection(msg.workspace)
     chat_model = msg.model or DEFAULT_MODEL
 
     def generate():
-        # ── Step 1: vault ──────────────────────────────────────
         vault_context = ""
         vault_sources = []
         RELEVANCE_THRESHOLD = 0.75
@@ -497,35 +647,29 @@ async def agent(msg: ChatMessage):
             q_emb = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
             v     = col.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
             if v["documents"][0]:
-                rel_docs = []
-                rel_meta = []
+                rel_docs, rel_meta = [], []
                 for doc, meta, dist in zip(v["documents"][0], v["metadatas"][0], v["distances"][0]):
                     if dist < RELEVANCE_THRESHOLD:
-                        rel_docs.append(doc)
-                        rel_meta.append(meta)
+                        rel_docs.append(doc); rel_meta.append(meta)
                 if rel_docs:
                     vault_context = "\n\n".join(rel_docs)
                     vault_sources = list(set(m["source"] for m in rel_meta))
-        except Exception:
-            pass
+        except Exception: pass
 
-        # ── Step 2: web ────────────────────────────────────────
         yield f"data: {json.dumps({'status': '🔍 Searching the web...'})}\n\n"
-        search_hits = web_search(msg.message, max_results=6)
+        search_hits = web_search(msg.message, 6)
         if not search_hits:
-            yield f"data: {json.dumps({'status': '⚠️ No web results found, using vault only.'})}\n\n"
+            yield f"data: {json.dumps({'status': '⚠️ No web results, using vault only.'})}\n\n"
 
         web_context = ""
         web_sources = []
         scraped     = 0
         for hit in search_hits:
-            if scraped >= 3:
-                break
+            if scraped >= 3: break
             url   = hit.get("href", "")
             title = hit.get("title", url)
-            body  = hit.get("body", "")
             yield f"data: {json.dumps({'status': f'📄 Reading: {title[:50]}...'})}\n\n"
-            page_text = smart_scrape(url) or body
+            page_text = smart_scrape(url) or hit.get("body", "")
             if page_text:
                 web_context += f"\n\nSource: {title}\nURL: {url}\n{page_text}"
                 web_sources.append(f"[{title}]({url})")
@@ -533,48 +677,30 @@ async def agent(msg: ChatMessage):
 
         yield f"data: {json.dumps({'status': '💬 Generating answer...'})}\n\n"
 
-        # ── Step 3: build combined context ────────────────────
         sections = []
-        if vault_context:
-            sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
-        if web_context:
-            sections.append(f"FROM THE WEB (live results):\n{web_context}")
+        if vault_context: sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
+        if web_context:   sections.append(f"FROM THE WEB:\n{web_context}")
 
         if not sections:
-            yield f"data: {json.dumps({'token': 'No relevant information found in your vault or on the web for this query.'})}\n\n"
+            yield f"data: {json.dumps({'token': 'No relevant information found.'})}\n\n"
             yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
             return
 
-        full_context = "\n\n" + "\n\n---\n\n".join(sections)
-        all_sources  = vault_sources + web_sources
-
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a personal AI agent with access to both the user's private documents and live web search results.\n"
-                    "Synthesize information from BOTH sources to give the most complete, accurate answer possible.\n"
-                    "Clearly distinguish when information comes from private documents vs. the web.\n"
-                    "NEVER invent or hallucinate information not present in the sources below.\n"
-                    "Be direct and actionable.\n"
-                    "Write in plain prose only. NO markdown formatting — no bold (**text**), no headers (##), no bullet points, no dashes as list items. Just clean sentences and paragraphs.\n\n"
-                    f"SOURCES:\n{full_context}"
-                )
-            }
+            {"role": "system", "content": (
+                "You are a personal AI agent. Synthesize information from both private docs and web results.\n"
+                "NEVER hallucinate. Be direct. Plain prose only — no markdown.\n\n"
+                f"SOURCES:\n\n{'---'.join(sections)}"
+            )}
         ]
-        for h in msg.history[-6:]:
-            messages.append(h)
+        for h in msg.history[-6:]: messages.append(h)
         messages.append({"role": "user", "content": msg.message})
 
         stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
         for chunk in stream:
             token = chunk["message"]["content"]
-            if token:
-                yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'done': True, 'sources': all_sources})}\n\n"
+            if token: yield f"data: {json.dumps({'token': token})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'sources': vault_sources + web_sources})}\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
