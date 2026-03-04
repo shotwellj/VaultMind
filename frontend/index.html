@@ -155,6 +155,11 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
 .feed-chunks{font-size:10px;color:#2a2a2a}
 .feed-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#222;text-align:center;gap:12px}
 .feed-empty .big{font-size:40px}.feed-empty p{font-size:13px;color:#2a2a2a;line-height:1.7}
+.feed-item.clickable{cursor:pointer}
+.feed-item.clickable:hover{border-color:#6366f1;background:#0b0b1a}
+.connector-badge{cursor:pointer;transition:all .15s}
+.connector-badge.filtering{background:#6366f1;border-color:#6366f1;color:#fff}
+.connector-badge.filtering .dot{background:#fff}
 
 /* ── Settings Modal ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -456,14 +461,15 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
 const API = 'http://localhost:8000';
 
 // ── State ─────────────────────────────────────────────────────
-let currentWorkspace = 'Default';
-let currentModel     = 'mistral';
-let history          = [];
-let busy             = false;
-let agentMode        = false;
-let docCount         = 0;
-let webCount         = 0;
-let currentTab       = 'chat';
+let currentWorkspace  = 'Default';
+let currentModel      = 'mistral';
+let history           = [];
+let busy              = false;
+let agentMode         = false;
+let docCount          = 0;
+let webCount          = 0;
+let currentTab        = 'chat';
+let filterConnector   = null;  // null = show all
 
 // ── DOM ───────────────────────────────────────────────────────
 const sidebar        = document.querySelector('.sidebar');
@@ -780,18 +786,25 @@ function timeAgo(iso) {
 
 async function loadFeed() {
   try {
-    const d      = await fetch(`${API}/feed?limit=50`).then(r => r.json());
-    const events = d.events || [];
-    const list   = document.getElementById('feed-list');
+    const d        = await fetch(`${API}/feed?limit=200`).then(r => r.json());
+    const events   = d.events || [];
+    const list     = document.getElementById('feed-list');
 
-    // Remove old items (keep header + connector bar + empty state structure)
+    // Remove old items
     [...list.querySelectorAll('.feed-item')].forEach(el => el.remove());
-    document.getElementById('feed-empty').style.display = events.length ? 'none' : 'flex';
 
-    events.forEach(ev => {
+    const displayed = filterConnector
+      ? events.filter(ev => ev.connector === filterConnector)
+      : events;
+
+    document.getElementById('feed-empty').style.display = displayed.length ? 'none' : 'flex';
+
+    displayed.forEach(ev => {
       const icon = CONNECTOR_ICONS[ev.connector] || '📄';
       const el   = document.createElement('div');
-      el.className = 'feed-item';
+      el.className = 'feed-item clickable';
+      el.title    = 'Click to chat about this';
+      el.onclick  = () => jumpToChat(ev.workspace, ev.title, ev.connector);
       el.innerHTML = `
         <div class="feed-item-icon">${icon}</div>
         <div class="feed-item-body">
@@ -806,6 +819,35 @@ async function loadFeed() {
       list.appendChild(el);
     });
   } catch {}
+}
+
+function jumpToChat(workspace, title, connector) {
+  // Switch to the right workspace
+  if (workspace && [...wsSelect.options].some(o => o.value === workspace)) {
+    if (wsSelect.value !== workspace) {
+      wsSelect.value   = workspace;
+      currentWorkspace = workspace;
+      history = [];
+      clearFilesList();
+      loadFiles();
+      ping();
+    }
+  }
+  // Switch to chat tab
+  switchTab('chat');
+  // Pre-fill with a smart prompt
+  const verb = connector === 'gmail'  ? 'Summarize this email: '   :
+               connector === 'notion' ? 'Tell me about this page: ' :
+                                        'Tell me about: ';
+  qEl.value = verb + title;
+  qEl.focus();
+  closeSidebarOnMobile();
+}
+
+function toggleFeedFilter(connectorId) {
+  filterConnector = filterConnector === connectorId ? null : connectorId;
+  updateConnectorBar();
+  loadFeed();
 }
 
 // ── Gmail ─────────────────────────────────────────────────────
@@ -886,15 +928,26 @@ async function updateConnectorBar() {
     const bar        = document.getElementById('connector-bar');
     bar.innerHTML    = '';
     const connectors = d.connectors || {};
+
+    // "All" pill
+    const allBadge     = document.createElement('div');
+    allBadge.className = `connector-badge${filterConnector === null ? ' filtering' : ''}`;
+    allBadge.textContent = 'All';
+    allBadge.onclick   = () => { filterConnector = null; updateConnectorBar(); loadFeed(); };
+    bar.appendChild(allBadge);
+
     const all = [
-      {id:'notion',  label:'Notion',  icon:'📓', active: connectors.notion?.enabled === true},
-      {id:'gmail',   label:'Gmail',   icon:'📧', active: gmailSt.connected === true},
-      {id:'slack',   label:'Slack',   icon:'💬', active: false},
+      {id:'notion', label:'Notion', icon:'📓', active: connectors.notion?.enabled === true},
+      {id:'gmail',  label:'Gmail',  icon:'📧', active: gmailSt.connected === true},
+      {id:'upload', label:'Uploads', icon:'📂', active: true},
+      {id:'url',    label:'Web',    icon:'🌐', active: true},
     ];
     all.forEach(c => {
-      const badge     = document.createElement('div');
-      badge.className = `connector-badge ${c.active ? 'active' : ''}`;
-      badge.innerHTML = `<span class="dot"></span>${c.icon} ${c.label}`;
+      const isFiltering = filterConnector === c.id;
+      const badge       = document.createElement('div');
+      badge.className   = `connector-badge ${c.active ? 'active' : ''} ${isFiltering ? 'filtering' : ''}`;
+      badge.innerHTML   = `<span class="dot"></span>${c.icon} ${c.label}`;
+      badge.onclick     = () => toggleFeedFilter(c.id);
       bar.appendChild(badge);
     });
   } catch {}
