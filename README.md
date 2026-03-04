@@ -36,6 +36,35 @@ The script handles Ollama, model downloads, Python deps, and opens the UI.
 
 ---
 
+## Access from Your Phone
+
+VaultMind runs in any browser — including on your phone.
+
+### On your home WiFi (works right now)
+Find your Mac's local IP:
+```bash
+ipconfig getifaddr en0
+```
+Then on your phone, open: `http://192.168.x.x:8000`
+
+That's it. Tap **Add to Home Screen** in Safari or Chrome and it installs as an app icon.
+
+### From anywhere (Tailscale — free, 5 min setup)
+Tailscale creates a private encrypted tunnel between your devices.
+
+1. Install [Tailscale](https://tailscale.com) on your Mac and phone (free)
+2. Sign in on both with the same account
+3. Your Mac gets a permanent private address like `100.x.x.x`
+4. On your phone: open `http://100.x.x.x:8000` from anywhere in the world
+
+Your vault never touches the internet — Tailscale just routes the connection privately.
+
+### OpenClaw (WhatsApp/Telegram access)
+Install the VaultMind OpenClaw skill to query your vault via any messaging app.
+See the [Use with OpenClaw](#use-with-openclaw) section below.
+
+---
+
 ## The Idea
 
 Every SaaS product you pay for is three things: a database, a UI, and a way to query your data. You're paying Salesforce $150/month because it can answer *"who are my hot leads"* — but YOUR data is doing all the work.

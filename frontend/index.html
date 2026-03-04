@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#6366f1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="VaultMind">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.json">
 <title>VaultMind</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -260,6 +266,47 @@
   }
   .toast.show{opacity:1}
   .toast.err{background:#ef4444}
+
+  /* ── Mobile ─────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    /* Sidebar hidden by default on mobile — user taps ☰ to open */
+    .sidebar{
+      position:fixed;
+      top:0;left:0;bottom:0;
+      z-index:50;
+      width:280px;
+      transform:translateX(-100%);
+      transition:transform .25s ease, opacity .25s ease;
+      opacity:0;
+    }
+    .sidebar.mobile-open{
+      transform:translateX(0);
+      opacity:1;
+    }
+    /* Overlay behind sidebar */
+    .sidebar-overlay{
+      display:none;
+      position:fixed;inset:0;
+      background:rgba(0,0,0,.6);
+      z-index:49;
+    }
+    .sidebar-overlay.show{display:block}
+    /* Chat takes full width */
+    .chat{width:100%}
+    /* Bigger tap targets */
+    .bar input{font-size:16px;padding:13px 14px} /* prevents iOS zoom */
+    .bar button{padding:13px 16px}
+    .mode-btn{padding:13px 12px;font-size:12px}
+    /* Messages narrower max-width */
+    .msg-user{max-width:85%}
+    .msg-bot{max-width:90%}
+    .msgs{padding:16px 14px;gap:14px}
+    /* Header compact */
+    header{padding:10px 14px}
+    .tagline{display:none}
+    /* Toast above keyboard */
+    .toast{bottom:90px}
+  }
 </style>
 </head>
 
@@ -322,6 +369,9 @@
     <span class="stext">Connecting...</span>
   </div>
 </header>
+
+<!-- ── Sidebar overlay (mobile tap-to-close) ── -->
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
 
 <!-- ── App ── -->
 <div class="main">
@@ -395,14 +445,42 @@
 <script>
 const API     = 'http://localhost:8000';
 
-// ── Sidebar collapse toggle ───────────────────────────────────
-const sidebar       = document.querySelector('.sidebar');
-const sidebarToggle = document.getElementById('sidebar-toggle');
+// ── Sidebar toggle — desktop collapse / mobile slide-in ──────
+const sidebar        = document.querySelector('.sidebar');
+const sidebarToggle  = document.getElementById('sidebar-toggle');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
+const isMobile       = () => window.innerWidth <= 640;
+
+function openSidebar() {
+  if (isMobile()) {
+    sidebar.classList.add('mobile-open');
+    sidebarOverlay.classList.add('show');
+    sidebarToggle.textContent = '✕';
+  } else {
+    sidebar.classList.remove('collapsed');
+    sidebarToggle.textContent = '☰';
+  }
+}
+function closeSidebar() {
+  if (isMobile()) {
+    sidebar.classList.remove('mobile-open');
+    sidebarOverlay.classList.remove('show');
+    sidebarToggle.textContent = '☰';
+  } else {
+    sidebar.classList.add('collapsed');
+    sidebarToggle.textContent = '▶';
+  }
+}
 sidebarToggle.onclick = () => {
-  sidebar.classList.toggle('collapsed');
-  sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '▶' : '☰';
-  sidebarToggle.title       = sidebar.classList.contains('collapsed') ? 'Show panel' : 'Hide panel';
+  const mobileOpen   = sidebar.classList.contains('mobile-open');
+  const desktopOpen  = !sidebar.classList.contains('collapsed');
+  if (isMobile()) { mobileOpen  ? closeSidebar() : openSidebar(); }
+  else            { desktopOpen ? closeSidebar() : openSidebar(); }
 };
+sidebarOverlay.onclick = closeSidebar;
+
+// Auto-close sidebar when a message is sent on mobile
+function closeSidebarOnMobile() { if (isMobile()) closeSidebar(); }
 const msgsEl  = document.getElementById('msgs');
 const qEl     = document.getElementById('q');
 const sendBtn = document.getElementById('send');
@@ -637,6 +715,7 @@ qEl.onkeydown   = e => { if (e.key === 'Enter' && !e.shiftKey && !busy) ask(); }
 async function ask() {
   const text = qEl.value.trim(); if (!text || busy) return;
   document.getElementById('empty')?.remove();
+  closeSidebarOnMobile();
   addUserMsg(text);
   qEl.value = ''; busy = true; qEl.disabled = sendBtn.disabled = true;
 

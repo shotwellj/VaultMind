@@ -35,6 +35,13 @@ async def serve_frontend():
         return FileResponse(FRONTEND_FILE)
     return {"message": "VaultMind API running. Frontend not found at ../frontend/index.html"}
 
+@app.get("/manifest.json", include_in_schema=False)
+async def serve_manifest():
+    manifest = os.path.join(FRONTEND_DIR, "manifest.json")
+    if os.path.exists(manifest):
+        return FileResponse(manifest, media_type="application/manifest+json")
+    return {}
+
 chroma = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma.get_or_create_collection("vaultmind_docs")
 
