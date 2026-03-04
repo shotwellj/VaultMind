@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+chromadb
+pypdf
+python-docx
+beautifulsoup4
+requests
+ddgs
+ollama
+python-multipart

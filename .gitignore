@@ -1,0 +1,24 @@
+# Vector database — your indexed documents stay local
+backend/chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# Uploaded files (if any temp storage is added later)
+uploads/

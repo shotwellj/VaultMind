@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VaultMind</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f0f;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+  /* ── Header ── */
+  header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-items:center;gap:12px;flex-shrink:0;background:#0f0f0f}
+  .logo{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}.logo span{color:#6366f1}
+  .tagline{font-size:11px;color:#333;margin-top:1px}
+  .hstatus{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:#555}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:#2a2a2a;flex-shrink:0;transition:background .4s}
+  .hstatus.ok .live-dot{background:#22c55e}
+  .hstatus.ok .stext{color:#22c55e}
+  .hstatus.warn .live-dot{background:#f59e0b}
+  .hstatus.warn .stext{color:#f59e0b}
+
+  /* ── Setup Wizard ── */
+  #setup-screen{position:fixed;inset:0;background:#0f0f0f;display:flex;align-items:center;justify-content:center;z-index:100;padding:24px}
+  .setup-card{background:#141414;border:1px solid #222;border-radius:20px;padding:40px;max-width:480px;width:100%;text-align:center}
+  .setup-card .lock{font-size:52px;margin-bottom:20px}
+  .setup-card h1{font-size:22px;font-weight:700;margin-bottom:8px}
+  .setup-card h1 span{color:#6366f1}
+  .setup-card .sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:28px}
+  .steps{display:flex;flex-direction:column;gap:10px;margin-bottom:28px;text-align:left}
+  .step{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;background:#1a1a1a;border-radius:12px;border:1px solid #222;transition:border-color .3s}
+  .step.done{border-color:#1a3a1a}
+  .step.active{border-color:#6366f1}
+  .step-icon{font-size:20px;flex-shrink:0;width:26px;text-align:center;margin-top:2px}
+  .step-body .step-title{font-size:14px;font-weight:600;margin-bottom:3px}
+  .step-body .step-desc{font-size:12px;color:#555;line-height:1.5}
+  .step-body .step-desc a{color:#6366f1;text-decoration:none}
+  .step-status{margin-left:auto;font-size:12px;color:#444;flex-shrink:0;padding-top:2px}
+  .step.done .step-status{color:#22c55e}
+  .step.active .step-status{color:#f59e0b}
+  .setup-btn{width:100%;padding:14px;background:#6366f1;border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:background .2s}
+  .setup-btn:hover{background:#5254cc}
+  .setup-btn:disabled{background:#1e1e1e;color:#444;cursor:not-allowed}
+  .setup-note{font-size:12px;color:#333;margin-top:14px;line-height:1.5}
+
+  /* ── Main Layout ── */
+  .main{display:flex;flex:1;overflow:hidden}
+
+  /* ── Left Panel ── */
+  .sidebar{
+    width:280px;
+    border-right:1px solid #1a1a1a;
+    display:flex;
+    flex-direction:column;
+    flex-shrink:0;
+    background:#0c0c0c;
+    overflow:hidden;
+    transition:width .25s ease, opacity .25s ease;
+  }
+  .sidebar.collapsed{
+    width:0;
+    opacity:0;
+    border-right:none;
+    pointer-events:none;
+  }
+
+  /* ── Sidebar toggle button ── */
+  .sidebar-toggle{
+    background:none;
+    border:none;
+    color:#333;
+    cursor:pointer;
+    font-size:16px;
+    padding:4px 6px;
+    border-radius:6px;
+    transition:color .15s, background .15s;
+    margin-left:4px;
+    flex-shrink:0;
+    line-height:1;
+  }
+  .sidebar-toggle:hover{color:#aaa;background:#1a1a1a}
+
+  /* Upload zone at top */
+  .upload-zone{
+    margin:14px 14px 0;
+    border:2px dashed #1e1e1e;
+    border-radius:10px;
+    padding:18px 12px;
+    text-align:center;
+    cursor:pointer;
+    transition:all .2s;
+    flex-shrink:0;
+  }
+  .upload-zone:hover,.upload-zone.over{border-color:#6366f1;background:#0e0e1e}
+  .upload-zone .ico{font-size:22px;margin-bottom:6px}
+  .upload-zone p{font-size:11px;color:#444;line-height:1.6}
+  .upload-zone strong{color:#777;font-weight:500;font-size:12px}
+  #file-input{display:none}
+
+  /* URL input row */
+  .url-zone{
+    margin:10px 14px 0;
+    display:flex;
+    gap:6px;
+    flex-shrink:0;
+  }
+  .url-zone input{
+    flex:1;background:#141414;border:1px solid #1e1e1e;border-radius:8px;
+    padding:8px 11px;color:#e0e0e0;font-size:12px;outline:none;
+    transition:border-color .2s;min-width:0;
+  }
+  .url-zone input:focus{border-color:#6366f1}
+  .url-zone input::placeholder{color:#333}
+  .url-zone button{
+    background:#141414;border:1px solid #2a2a2a;border-radius:8px;
+    padding:8px 12px;color:#888;font-size:12px;cursor:pointer;
+    white-space:nowrap;transition:all .15s;flex-shrink:0;
+  }
+  .url-zone button:hover{border-color:#6366f1;color:#e0e0e0}
+
+  /* Source panels */
+  .source-panels{
+    flex:1;
+    overflow-y:auto;
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
+  .source-panels::-webkit-scrollbar{width:4px}
+  .source-panels::-webkit-scrollbar-track{background:transparent}
+  .source-panels::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+
+  /* Section header */
+  .section-header{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:0 2px;
+    margin-bottom:6px;
+  }
+  .section-header .section-label{
+    font-size:10px;
+    font-weight:600;
+    color:#3a3a3a;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+    flex:1;
+  }
+  .section-header .section-count{
+    font-size:10px;
+    color:#2a2a2a;
+    background:#1a1a1a;
+    border-radius:10px;
+    padding:1px 7px;
+    font-weight:600;
+  }
+
+  /* File card */
+  .file-card{
+    background:#141414;
+    border:1px solid #1a1a1a;
+    border-radius:9px;
+    padding:10px 12px;
+    display:flex;
+    align-items:flex-start;
+    gap:9px;
+    transition:border-color .15s;
+  }
+  .file-card:hover{border-color:#2a2a2a}
+  .file-card .card-icon{font-size:16px;flex-shrink:0;margin-top:1px;line-height:1}
+  .file-card .card-info{flex:1;min-width:0}
+  .file-card .card-name{
+    font-size:12px;font-weight:500;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    color:#ccc;margin-bottom:2px;
+  }
+  .file-card .card-meta{font-size:11px;color:#333}
+  .file-card .card-del{
+    background:none;border:none;color:#222;cursor:pointer;
+    font-size:15px;padding:0;flex-shrink:0;line-height:1;
+    transition:color .15s;margin-top:1px;
+  }
+  .file-card .card-del:hover{color:#ef4444}
+
+  /* Empty section placeholder */
+  .section-empty{
+    font-size:11px;color:#252525;
+    padding:10px 4px;
+    font-style:italic;
+  }
+
+  /* Section divider */
+  .section-divider{height:1px;background:#161616;margin:2px 0}
+
+  /* ── Chat area ── */
+  .chat{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0f0f0f}
+  .msgs{flex:1;overflow-y:auto;padding:28px 32px;display:flex;flex-direction:column;gap:18px}
+  .msgs::-webkit-scrollbar{width:4px}
+  .msgs::-webkit-scrollbar-track{background:transparent}
+  .msgs::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
+
+  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#222;text-align:center;gap:14px;user-select:none}
+  .empty-state .big{font-size:44px}
+  .empty-state .empty-title{font-size:15px;font-weight:600;color:#2a2a2a}
+  .empty-state .empty-sub{font-size:13px;color:#222;line-height:1.7}
+
+  .msg-user{
+    align-self:flex-end;background:#6366f1;color:#fff;
+    padding:11px 16px;border-radius:16px 16px 3px 16px;
+    font-size:14px;max-width:65%;line-height:1.6;
+  }
+  .msg-bot{align-self:flex-start;max-width:78%}
+  .msg-bot .bubble{
+    background:#141414;border:1px solid #1a1a1a;
+    padding:14px 18px;border-radius:3px 16px 16px 16px;
+    font-size:14px;white-space:pre-wrap;line-height:1.75;word-break:break-word;
+    color:#d0d0d0;
+  }
+  .msg-bot .src{font-size:11px;color:#2a2a2a;margin-top:7px;padding-left:2px}
+
+  /* Input bar */
+  .bar{
+    padding:14px 20px;border-top:1px solid #1a1a1a;
+    display:flex;gap:9px;flex-shrink:0;background:#0f0f0f;
+  }
+  .bar input{
+    flex:1;background:#141414;border:1px solid #1e1e1e;
+    border-radius:11px;padding:12px 16px;color:#e0e0e0;
+    font-size:14px;outline:none;transition:border-color .2s;
+  }
+  .bar input:focus{border-color:#6366f1}
+  .bar input::placeholder{color:#2d2d2d}
+  .bar button{
+    background:#6366f1;border:none;border-radius:11px;
+    padding:12px 22px;color:#fff;font-size:14px;font-weight:600;
+    cursor:pointer;transition:background .15s;
+  }
+  .bar button:hover{background:#5254cc}
+  .bar button:disabled{background:#1a1a1a;color:#2d2d2d;cursor:not-allowed}
+  .mode-btn{
+    background:#141414;border:1px solid #222;border-radius:11px;
+    padding:12px 15px;color:#444;font-size:13px;font-weight:500;
+    cursor:pointer;transition:all .2s;white-space:nowrap;
+  }
+  .mode-btn.agent{background:#0e0e22;border-color:#6366f1;color:#6366f1}
+
+  /* Agent status line */
+  .status-msg{
+    font-size:12px;color:#444;padding:5px 4px;
+    font-style:italic;align-self:flex-start;max-width:78%;
+  }
+
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  .cursor{display:inline-block;width:2px;height:14px;background:#6366f1;margin-left:1px;vertical-align:middle;animation:blink .7s step-end infinite}
+
+  .toast{
+    position:fixed;bottom:72px;right:18px;background:#22c55e;color:#fff;
+    padding:9px 15px;border-radius:8px;font-size:13px;font-weight:500;
+    opacity:0;transition:opacity .25s;pointer-events:none;z-index:200;max-width:300px;
+  }
+  .toast.show{opacity:1}
+  .toast.err{background:#ef4444}
+</style>
+</head>
+
+<body>
+
+<!-- ── Setup Wizard ── -->
+<div id="setup-screen">
+  <div class="setup-card">
+    <div class="lock">🔒</div>
+    <h1>Welcome to <span>VaultMind</span></h1>
+    <p class="sub">Your personal AI. Runs entirely on your computer.<br>Your documents never leave your machine.</p>
+    <div class="steps">
+      <div class="step" id="s-ollama">
+        <div class="step-icon">🧠</div>
+        <div class="step-body">
+          <div class="step-title">Ollama</div>
+          <div class="step-desc">Runs AI models locally. <a href="https://ollama.ai/download" target="_blank">Download at ollama.ai</a> if not installed, then run: <code>bash start.sh</code></div>
+        </div>
+        <div class="step-status" id="s-ollama-status">Checking...</div>
+      </div>
+      <div class="step" id="s-embed">
+        <div class="step-icon">📐</div>
+        <div class="step-body">
+          <div class="step-title">Embedding Model</div>
+          <div class="step-desc">nomic-embed-text — understands your documents (274 MB, one-time download)</div>
+        </div>
+        <div class="step-status" id="s-embed-status">Waiting...</div>
+      </div>
+      <div class="step" id="s-llm">
+        <div class="step-icon">💬</div>
+        <div class="step-body">
+          <div class="step-title">Language Model</div>
+          <div class="step-desc">mistral — answers your questions (~4 GB, one-time download)</div>
+        </div>
+        <div class="step-status" id="s-llm-status">Waiting...</div>
+      </div>
+      <div class="step" id="s-backend">
+        <div class="step-icon">⚙️</div>
+        <div class="step-body">
+          <div class="step-title">VaultMind Backend</div>
+          <div class="step-desc">Local server that connects everything together</div>
+        </div>
+        <div class="step-status" id="s-backend-status">Checking...</div>
+      </div>
+    </div>
+    <button class="setup-btn" id="setup-btn" disabled>Setting up...</button>
+    <p class="setup-note" id="setup-note">Run <strong>bash start.sh</strong> in Terminal to set everything up automatically.</p>
+  </div>
+</div>
+
+<!-- ── Header ── -->
+<header>
+  <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle panel">☰</button>
+  <div>
+    <div class="logo">Vault<span>Mind</span></div>
+    <div class="tagline">Your AI. Your data. Your machine.</div>
+  </div>
+  <div class="hstatus" id="hstatus">
+    <div class="live-dot"></div>
+    <span class="stext">Connecting...</span>
+  </div>
+</header>
+
+<!-- ── App ── -->
+<div class="main">
+
+  <!-- Left Panel -->
+  <div class="sidebar">
+
+    <!-- Drop zone -->
+    <div class="upload-zone" id="zone">
+      <div class="ico">📂</div>
+      <p><strong>Drop files here</strong><br>PDF · Word · TXT · MD · CSV</p>
+    </div>
+    <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.csv" multiple>
+
+    <!-- URL input -->
+    <div class="url-zone">
+      <input id="url-input" type="url" placeholder="Paste a URL to index…">
+      <button id="url-btn">Add</button>
+    </div>
+
+    <!-- Source panels -->
+    <div class="source-panels">
+
+      <!-- Documents section -->
+      <div id="docs-section">
+        <div class="section-header">
+          <span class="section-label">Documents</span>
+          <span class="section-count" id="docs-count">0</span>
+        </div>
+        <div id="docs-list">
+          <div class="section-empty" id="docs-empty">No documents indexed yet</div>
+        </div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Web sources section -->
+      <div id="web-section">
+        <div class="section-header">
+          <span class="section-label">Web Sources</span>
+          <span class="section-count" id="web-count">0</span>
+        </div>
+        <div id="web-list">
+          <div class="section-empty" id="web-empty">No URLs indexed yet</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat">
+    <div class="msgs" id="msgs">
+      <div class="empty-state" id="empty">
+        <div class="big">🔒</div>
+        <div class="empty-title">Nothing leaves this machine</div>
+        <div class="empty-sub">Drop a file or paste a URL on the left,<br>then ask anything about it.</div>
+      </div>
+    </div>
+    <div class="bar">
+      <button class="mode-btn" id="mode-btn" title="Toggle Agent mode">🔒 Vault</button>
+      <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
+      <button id="send" disabled>Send</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API     = 'http://localhost:8000';
+
+// ── Sidebar collapse toggle ───────────────────────────────────
+const sidebar       = document.querySelector('.sidebar');
+const sidebarToggle = document.getElementById('sidebar-toggle');
+sidebarToggle.onclick = () => {
+  sidebar.classList.toggle('collapsed');
+  sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '▶' : '☰';
+  sidebarToggle.title       = sidebar.classList.contains('collapsed') ? 'Show panel' : 'Hide panel';
+};
+const msgsEl  = document.getElementById('msgs');
+const qEl     = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+const zoneEl  = document.getElementById('zone');
+const fileInp = document.getElementById('file-input');
+const hstatus = document.getElementById('hstatus');
+
+let history   = [];
+let busy      = false;
+let agentMode = false;
+let docCount  = 0;
+let webCount  = 0;
+
+// ── Mode toggle ───────────────────────────────────────────────
+const modeBtn = document.getElementById('mode-btn');
+modeBtn.onclick = () => {
+  agentMode = !agentMode;
+  modeBtn.className = agentMode ? 'mode-btn agent' : 'mode-btn';
+  modeBtn.textContent = agentMode ? '🌐 Agent' : '🔒 Vault';
+  modeBtn.title = agentMode
+    ? 'Agent mode ON — answers from your vault + live web search'
+    : 'Vault mode — answers from your indexed documents only';
+  qEl.placeholder = agentMode
+    ? 'Ask anything — searches your vault + the live web…'
+    : 'Ask anything about your documents…';
+};
+
+// ── Setup Wizard ─────────────────────────────────────────────
+function setStep(id, state, text) {
+  const el  = document.getElementById(id);
+  const sts = document.getElementById(id + '-status');
+  el.className  = 'step ' + (state === 'done' ? 'done' : state === 'active' ? 'active' : '');
+  sts.textContent = text;
+}
+
+async function checkSetup() {
+  try {
+    const health = await fetch(`${API}/health`, { signal: AbortSignal.timeout(3000) }).then(r => r.json());
+    setStep('s-backend', 'done', '✓ Running');
+    setStep('s-ollama',  health.ollama      ? 'done' : 'active', health.ollama      ? '✓ Ready' : '✗ Not found');
+    setStep('s-embed',   health.embed_model ? 'done' : 'active', health.embed_model ? '✓ Ready' : '✗ Missing');
+    setStep('s-llm',     health.chat_model  ? 'done' : 'active', health.chat_model  ? '✓ Ready' : '✗ Missing');
+    if (health.ready) {
+      document.getElementById('setup-btn').textContent = '✓ Everything is ready — let\'s go';
+      document.getElementById('setup-btn').disabled   = false;
+      document.getElementById('setup-note').textContent = '';
+      document.getElementById('setup-btn').onclick    = launchApp;
+      setTimeout(launchApp, 1200);
+    } else {
+      document.getElementById('setup-btn').textContent = 'Run bash start.sh to continue';
+      setTimeout(checkSetup, 3000);
+    }
+  } catch {
+    setStep('s-backend', 'active', 'Not running');
+    setStep('s-ollama',  '', 'Waiting…');
+    setStep('s-embed',   '', 'Waiting…');
+    setStep('s-llm',     '', 'Waiting…');
+    document.getElementById('setup-btn').textContent  = 'Run bash start.sh to continue';
+    document.getElementById('setup-note').textContent = 'Open Terminal, navigate to the vaultmind folder, and run: bash start.sh';
+    setTimeout(checkSetup, 3000);
+  }
+}
+
+function launchApp() {
+  document.getElementById('setup-screen').style.display = 'none';
+  ping(); loadFiles();
+}
+
+checkSetup();
+
+// ── Status ping ──────────────────────────────────────────────
+async function ping() {
+  try {
+    const d = await fetch(`${API}/status`).then(r => r.json());
+    hstatus.className = 'hstatus ok';
+    hstatus.querySelector('.stext').textContent =
+      d.chunks_indexed === 0 ? 'Running — no docs yet' : `${d.chunks_indexed} chunks indexed`;
+    qEl.disabled = sendBtn.disabled = false;
+  } catch {
+    hstatus.className = 'hstatus warn';
+    hstatus.querySelector('.stext').textContent = 'Reconnecting…';
+    setTimeout(ping, 3000);
+  }
+}
+
+// ── Load existing files ──────────────────────────────────────
+async function loadFiles() {
+  try {
+    const d = await fetch(`${API}/files`).then(r => r.json());
+    d.files.forEach(f => addFileCard(f.name, f.chunks));
+  } catch {}
+}
+
+// ── File / URL ingestion ─────────────────────────────────────
+const ACCEPTED = ['.pdf','.docx','.txt','.md','.csv'];
+
+zoneEl.onclick    = () => fileInp.click();
+zoneEl.ondragover = e => { e.preventDefault(); zoneEl.classList.add('over'); };
+zoneEl.ondragleave= () => zoneEl.classList.remove('over');
+zoneEl.ondrop     = e => {
+  e.preventDefault(); zoneEl.classList.remove('over');
+  const valid = [...e.dataTransfer.files].filter(f => ACCEPTED.some(ext => f.name.toLowerCase().endsWith(ext)));
+  ingest(valid);
+};
+fileInp.onchange = () => ingest([...fileInp.files]);
+
+const urlInput = document.getElementById('url-input');
+const urlBtn   = document.getElementById('url-btn');
+urlBtn.onclick = ingestUrl;
+urlInput.onkeydown = e => { if (e.key === 'Enter') ingestUrl(); };
+
+async function ingestUrl() {
+  const url = urlInput.value.trim(); if (!url) return;
+  toast(`Fetching ${url}…`);
+  urlInput.value = ''; urlBtn.disabled = true;
+  try {
+    const d = await fetch(`${API}/ingest-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    }).then(r => r.json());
+    if (d.error) throw new Error(d.error);
+    addFileCard(d.source, d.chunks);
+    toast(`✅ ${d.source} — ${d.chunks} chunks`);
+    ping();
+  } catch(e) { toast(`❌ ${e.message}`, true); }
+  urlBtn.disabled = false;
+}
+
+async function ingest(files) {
+  for (const f of files) {
+    toast(`Indexing ${f.name}…`);
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      const d  = await fetch(`${API}/upload`, { method: 'POST', body: fd }).then(r => r.json());
+      if (d.error) throw new Error(d.error);
+      addFileCard(f.name, d.chunks);
+      toast(`✅ ${f.name} — ${d.chunks} chunks`);
+      ping();
+    } catch(e) { toast(`❌ ${e.message}`, true); }
+  }
+}
+
+// ── Add file card to correct section ────────────────────────
+function isWebSource(name) {
+  return name.startsWith('🌐') || name.startsWith('http://') || name.startsWith('https://');
+}
+
+function fileIcon(name) {
+  if (isWebSource(name)) return '🌐';
+  const ext = name.split('.').pop()?.toLowerCase();
+  return { pdf:'📄', docx:'📝', txt:'📝', md:'📝', csv:'📊' }[ext] || '📄';
+}
+
+function friendlyName(name) {
+  if (name.startsWith('🌐')) return name.slice(2).trim();
+  try {
+    const u = new URL(name);
+    return u.hostname + (u.pathname !== '/' ? u.pathname : '');
+  } catch {}
+  return name;
+}
+
+function updateCount(section, count) {
+  document.getElementById(section + '-count').textContent = count;
+}
+
+function addFileCard(name, chunks) {
+  const safeId = 'fc-' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'');
+  if (document.getElementById(safeId)) return;
+
+  const isWeb = isWebSource(name);
+  const listEl  = document.getElementById(isWeb ? 'web-list'  : 'docs-list');
+  const emptyEl = document.getElementById(isWeb ? 'web-empty' : 'docs-empty');
+
+  // Remove empty placeholder
+  if (emptyEl) emptyEl.remove();
+
+  // Update count
+  if (isWeb) { webCount++; updateCount('web', webCount); }
+  else        { docCount++; updateCount('docs', docCount); }
+
+  const icon  = fileIcon(name);
+  const label = friendlyName(name);
+  const chunkLabel = chunks === 1 ? '1 chunk' : `${chunks} chunks`;
+
+  const el = document.createElement('div');
+  el.className = 'file-card'; el.id = safeId;
+  el.innerHTML = `
+    <div class="card-icon">${icon}</div>
+    <div class="card-info">
+      <div class="card-name" title="${name}">${label}</div>
+      <div class="card-meta">${chunkLabel}</div>
+    </div>
+    <button class="card-del" title="Remove" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${isWeb ? 'web' : 'docs'}')">×</button>`;
+  listEl.appendChild(el);
+}
+
+async function deleteFile(encodedName, safeId, section) {
+  const name = decodeURIComponent(encodedName);
+  if (!confirm(`Remove "${name}" from the index?`)) return;
+  try {
+    const d = await fetch(`${API}/files/${encodedName}`, { method: 'DELETE' }).then(r => r.json());
+    if (d.error) throw new Error(d.error);
+    document.getElementById(safeId)?.remove();
+    // Update count
+    if (section === 'web') {
+      webCount = Math.max(0, webCount - 1); updateCount('web', webCount);
+      if (webCount === 0) {
+        const el = document.createElement('div');
+        el.className = 'section-empty'; el.id = 'web-empty';
+        el.textContent = 'No URLs indexed yet';
+        document.getElementById('web-list').appendChild(el);
+      }
+    } else {
+      docCount = Math.max(0, docCount - 1); updateCount('docs', docCount);
+      if (docCount === 0) {
+        const el = document.createElement('div');
+        el.className = 'section-empty'; el.id = 'docs-empty';
+        el.textContent = 'No documents indexed yet';
+        document.getElementById('docs-list').appendChild(el);
+      }
+    }
+    toast(`🗑️ Removed`); ping();
+  } catch(e) { toast(`❌ ${e.message}`, true); }
+}
+
+// ── Chat ─────────────────────────────────────────────────────
+sendBtn.onclick = ask;
+qEl.onkeydown   = e => { if (e.key === 'Enter' && !e.shiftKey && !busy) ask(); };
+
+async function ask() {
+  const text = qEl.value.trim(); if (!text || busy) return;
+  document.getElementById('empty')?.remove();
+  addUserMsg(text);
+  qEl.value = ''; busy = true; qEl.disabled = sendBtn.disabled = true;
+
+  const botEl  = document.createElement('div'); botEl.className = 'msg-bot';
+  const bubble = document.createElement('div'); bubble.className = 'bubble';
+  const cursor = document.createElement('span'); cursor.className = 'cursor';
+  bubble.appendChild(cursor); botEl.appendChild(bubble);
+  msgsEl.appendChild(botEl); msgsEl.scrollTop = msgsEl.scrollHeight;
+
+  let statusEl = null;
+  if (agentMode) {
+    statusEl = document.createElement('div');
+    statusEl.className = 'status-msg';
+    statusEl.textContent = '🔍 Starting agent…';
+    msgsEl.insertBefore(statusEl, botEl);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
+  let fullText = '';
+  try {
+    const endpoint = agentMode ? `${API}/agent` : `${API}/chat`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history })
+    });
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.status) {
+            if (statusEl) statusEl.textContent = data.status;
+            msgsEl.scrollTop = msgsEl.scrollHeight;
+          }
+          if (data.token) {
+            if (statusEl) { statusEl.remove(); statusEl = null; }
+            fullText += data.token;
+            bubble.textContent = stripMarkdown(fullText);
+            bubble.appendChild(cursor);
+            msgsEl.scrollTop = msgsEl.scrollHeight;
+          }
+          if (data.done) {
+            cursor.remove();
+            if (data.sources?.length) {
+              const s = document.createElement('div');
+              s.className = 'src';
+              s.textContent = 'Sources: ' + data.sources.join(', ');
+              botEl.appendChild(s);
+            }
+            history.push({ role: 'user',      content: text     });
+            history.push({ role: 'assistant', content: fullText });
+            if (history.length > 12) history = history.slice(-12);
+          }
+        } catch {}
+      }
+    }
+  } catch {
+    cursor.remove();
+    bubble.textContent = 'Connection error — is VaultMind running?';
+  }
+  busy = false; qEl.disabled = sendBtn.disabled = false;
+  qEl.focus(); msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+// ── Strip markdown from model output ────────────────────────
+function stripMarkdown(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')        // **bold** → plain
+    .replace(/\*(.+?)\*/g, '$1')            // *italic* → plain
+    .replace(/^#{1,6}\s+/gm, '')            // ## headers → plain
+    .replace(/^[\-\*]\s+/gm, '• ')          // - bullet → bullet dot
+    .replace(/^(\d+)\.\s+/gm, '$1. ')       // numbered lists stay
+    .replace(/`{1,3}([^`]*)`{1,3}/g, '$1') // `code` → plain
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url) → link text
+    .trim();
+}
+
+function addUserMsg(text) {
+  const d = document.createElement('div');
+  d.className = 'msg-user'; d.textContent = text;
+  msgsEl.appendChild(d); msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+function toast(msg, err = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 3500);
+}
+</script>
+</body>
+</html>
