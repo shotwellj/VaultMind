@@ -1,7 +1,9 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import os
 import chromadb
 import ollama
 import pypdf
@@ -20,6 +22,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Serve frontend ────────────────────────────────────────────
+# Looks for ../frontend/index.html relative to this file.
+# Works both locally (python) and in Docker (copied into image).
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+FRONTEND_FILE = os.path.join(FRONTEND_DIR, "index.html")
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    if os.path.exists(FRONTEND_FILE):
+        return FileResponse(FRONTEND_FILE)
+    return {"message": "VaultMind API running. Frontend not found at ../frontend/index.html"}
 
 chroma = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma.get_or_create_collection("vaultmind_docs")

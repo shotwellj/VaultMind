@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+
+  # ── Ollama — runs AI models locally ──────────────────────────
+  ollama:
+    image: ollama/ollama
+    container_name: vaultmind-ollama
+    volumes:
+      - ollama_models:/root/.ollama   # models persist between restarts
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Model puller — pulls models once on first run ─────────────
+  model-puller:
+    image: ollama/ollama
+    container_name: vaultmind-model-puller
+    volumes:
+      - ollama_models:/root/.ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: >
+      /bin/sh -c "
+        echo 'Pulling nomic-embed-text...' &&
+        ollama pull nomic-embed-text &&
+        echo 'Pulling mistral...' &&
+        ollama pull mistral &&
+        echo 'Models ready.'
+      "
+    restart: "no"
+
+  # ── VaultMind backend + frontend ─────────────────────────────
+  vaultmind:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: vaultmind-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - vault_data:/app/chroma_db    # your indexed documents persist
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_models:   # AI models (~6GB, downloaded once)
+  vault_data:      # your indexed documents (stays local)

@@ -8,6 +8,34 @@ Part of the [AIR Blackbox](https://airblackbox.ai) ecosystem — privacy-first A
 
 ---
 
+## Quick Start
+
+### Option 1 — Docker (recommended, no setup required)
+
+```bash
+git clone https://github.com/airblackbox/VaultMind.git
+cd VaultMind
+docker compose up
+```
+
+Then open **http://localhost:8000** in your browser. That's it.
+
+Docker pulls Ollama, downloads the models (~6GB, one-time), and starts everything automatically. Your indexed documents persist in a Docker volume between restarts.
+
+> **Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed. Works on Mac, Windows, Linux.
+
+### Option 2 — Native (Mac, requires Terminal)
+
+```bash
+git clone https://github.com/airblackbox/VaultMind.git
+cd VaultMind
+bash start.sh
+```
+
+The script handles Ollama, model downloads, Python deps, and opens the UI.
+
+---
+
 ## The Idea
 
 Every SaaS product you pay for is three things: a database, a UI, and a way to query your data. You're paying Salesforce $150/month because it can answer *"who are my hot leads"* — but YOUR data is doing all the work.
