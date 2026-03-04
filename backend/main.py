@@ -723,17 +723,30 @@ async def delete_connector(connector: str):
 # ── Chat ──────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
-    message:   str
-    history:   list[dict] = []
-    workspace: str = "Default"
-    model:     str = "mistral"
+    message:       str
+    history:       list[dict] = []
+    workspace:     str = "Default"
+    model:         str = "mistral"
+    pinned_source: str = ""   # when set, restrict retrieval to this exact source
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
     col                = get_collection(msg.workspace)
     chat_model         = msg.model or DEFAULT_MODEL
     question_embedding = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
-    results            = col.query(query_embeddings=[question_embedding], n_results=6)
+
+    # If the user clicked a specific feed item, pin retrieval to that source only
+    if msg.pinned_source:
+        results = col.query(
+            query_embeddings=[question_embedding],
+            n_results=10,
+            where={"source": msg.pinned_source}
+        )
+        # Fall back to normal search if pinned source has no chunks
+        if not results["documents"][0]:
+            results = col.query(query_embeddings=[question_embedding], n_results=6)
+    else:
+        results = col.query(query_embeddings=[question_embedding], n_results=6)
 
     if not results["documents"][0]:
         def no_docs():

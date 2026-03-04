@@ -315,6 +315,10 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
           <div class="empty-sub">Drop a file or paste a URL on the left,<br>then ask anything about it.</div>
         </div>
       </div>
+      <div id="pin-banner" style="display:none;padding:6px 20px;background:#08081a;border-top:1px solid #1a1a3a;font-size:12px;color:#6366f1;align-items:center;gap:8px;flex-shrink:0">
+        <span>📌 Pinned to this source — answers will only use this item</span>
+        <button onclick="clearPin()" style="background:none;border:none;color:#444;cursor:pointer;font-size:12px;padding:0;margin-left:auto;line-height:1" title="Clear pin">✕</button>
+      </div>
       <div class="bar">
         <button class="mode-btn" id="mode-btn">🔒 Vault</button>
         <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
@@ -470,6 +474,7 @@ let docCount          = 0;
 let webCount          = 0;
 let currentTab        = 'chat';
 let filterConnector   = null;  // null = show all
+let pinnedSource      = null;  // source_id pinned when clicking a feed item
 
 // ── DOM ───────────────────────────────────────────────────────
 const sidebar        = document.querySelector('.sidebar');
@@ -804,7 +809,7 @@ async function loadFeed() {
       const el   = document.createElement('div');
       el.className = 'feed-item clickable';
       el.title    = 'Click to chat about this';
-      el.onclick  = () => jumpToChat(ev.workspace, ev.title, ev.connector);
+      el.onclick  = () => jumpToChat(ev.workspace, ev.title, ev.connector, ev.source_id);
       el.innerHTML = `
         <div class="feed-item-icon">${icon}</div>
         <div class="feed-item-body">
@@ -821,7 +826,7 @@ async function loadFeed() {
   } catch {}
 }
 
-function jumpToChat(workspace, title, connector) {
+function jumpToChat(workspace, title, connector, sourceId) {
   // Switch to the right workspace
   if (workspace && [...wsSelect.options].some(o => o.value === workspace)) {
     if (wsSelect.value !== workspace) {
@@ -833,6 +838,9 @@ function jumpToChat(workspace, title, connector) {
       ping();
     }
   }
+  // Pin retrieval to this exact source so the right item comes back
+  pinnedSource = sourceId || null;
+  updatePinBanner();
   // Switch to chat tab
   switchTab('chat');
   // Pre-fill with a smart prompt
@@ -842,6 +850,16 @@ function jumpToChat(workspace, title, connector) {
   qEl.value = verb + title;
   qEl.focus();
   closeSidebarOnMobile();
+}
+
+function updatePinBanner() {
+  const banner = document.getElementById('pin-banner');
+  if (banner) banner.style.display = pinnedSource ? 'flex' : 'none';
+}
+
+function clearPin() {
+  pinnedSource = null;
+  updatePinBanner();
 }
 
 function toggleFeedFilter(connectorId) {
@@ -973,11 +991,18 @@ async function ask() {
   let statusEl = null;
   if (agentMode) { statusEl = document.createElement('div'); statusEl.className='status-msg'; statusEl.textContent='🔍 Starting agent…'; msgsEl.insertBefore(statusEl, botEl); msgsEl.scrollTop = msgsEl.scrollHeight; }
 
+  // Capture pinned source for this request, then clear it
+  const thisPinnedSource = pinnedSource;
+  pinnedSource = null;
+  updatePinBanner();
+
   let fullText = '';
   try {
+    const chatBody = { message: text, history, workspace: currentWorkspace, model: currentModel };
+    if (thisPinnedSource) chatBody.pinned_source = thisPinnedSource;
     const res = await fetch(agentMode ? `${API}/agent` : `${API}/chat`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message: text, history, workspace: currentWorkspace, model: currentModel })
+      body: JSON.stringify(chatBody)
     });
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     while (true) {
