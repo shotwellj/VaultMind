@@ -1,229 +1,191 @@
 # VaultMind
 
-**A private knowledge operating system. Your data, your machine, your rules.**
+**Chat with your documents, email, and the web — entirely on your own machine.**
 
-VaultMind indexes everything you know — documents, spreadsheets, web pages, exported data from any app — and lets you query all of it in plain English using a local LLM. Nothing leaves your machine. No subscription. No vendor.
+No API keys. No cloud. No subscription. Everything runs locally via [Ollama](https://ollama.ai).
 
-Part of the [AIR Blackbox](https://airblackbox.ai) ecosystem — privacy-first AI tooling.
+![VaultMind screenshot](docs/screenshot.png)
+
+---
+
+## Why VaultMind
+
+Every other "chat with your docs" tool sends your data to OpenAI, Anthropic, or some other cloud. VaultMind doesn't. The LLM runs on your hardware. The vector database lives on your disk. Nothing is transmitted anywhere.
+
+| | VaultMind | ChatGPT / Claude | PrivateGPT | Obsidian Copilot |
+|---|---|---|---|---|
+| 100% local | ✅ | ❌ | ✅ | ❌ |
+| Gmail integration | ✅ | ❌ | ❌ | ❌ |
+| Live web search | ✅ | ✅ | ❌ | ❌ |
+| One-command setup | ✅ | ✅ | ❌ | ❌ |
+| No API key needed | ✅ | ❌ | ✅ | ❌ |
+| Electron Mac app | ✅ | — | ❌ | ❌ |
 
 ---
 
 ## Quick Start
 
-### Option 1 — Docker (recommended, no setup required)
+**Prerequisite:** [Ollama](https://ollama.ai/download) installed and running.
 
 ```bash
 git clone https://github.com/airblackbox/VaultMind.git
 cd VaultMind
+bash start.sh
+```
+
+That's it. `start.sh` pulls the models (~4.5 GB, one-time), installs Python deps, starts the backend, and opens `http://localhost:8000`.
+
+### Docker (no Ollama install required)
+
+```bash
 docker compose up
 ```
 
-Then open **http://localhost:8000** in your browser. That's it.
-
-Docker pulls Ollama, downloads the models (~6GB, one-time), and starts everything automatically. Your indexed documents persist in a Docker volume between restarts.
-
-> **Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed. Works on Mac, Windows, Linux.
-
-### Option 2 — Native (Mac, requires Terminal)
-
-```bash
-git clone https://github.com/airblackbox/VaultMind.git
-cd VaultMind
-bash start.sh
-```
-
-The script handles Ollama, model downloads, Python deps, and opens the UI.
+Then open `http://localhost:8000`. Docker handles everything including Ollama.
 
 ---
 
-## Access from Your Phone
+## What You Can Do
 
-VaultMind runs in any browser — including on your phone.
+**Drop in any file** — PDF, DOCX, TXT, Markdown, CSV — and ask questions across all of it.
 
-### On your home WiFi (works right now)
-Find your Mac's local IP:
-```bash
-ipconfig getifaddr en0
-```
-Then on your phone, open: `http://192.168.x.x:8000`
+**Paste any URL** — VaultMind fetches and indexes it instantly. Paste a job posting, a competitor's pricing page, a research paper.
 
-That's it. Tap **Add to Home Screen** in Safari or Chrome and it installs as an app icon.
+**Connect Gmail** — OAuth into your inbox and VaultMind indexes your emails locally. Ask *"what did my lawyer say about the contract?"* or *"summarize my inbox"*.
 
-### From anywhere (Tailscale — free, 5 min setup)
-Tailscale creates a private encrypted tunnel between your devices.
+**Connect Notion** — Paste your integration token and your workspace syncs automatically on a configurable schedule.
 
-1. Install [Tailscale](https://tailscale.com) on your Mac and phone (free)
-2. Sign in on both with the same account
-3. Your Mac gets a permanent private address like `100.x.x.x`
-4. On your phone: open `http://100.x.x.x:8000` from anywhere in the world
-
-Your vault never touches the internet — Tailscale just routes the connection privately.
-
-### OpenClaw (WhatsApp/Telegram access)
-Install the VaultMind OpenClaw skill to query your vault via any messaging app.
-See the [Use with OpenClaw](#use-with-openclaw) section below.
+**Agent mode** — Toggle 🌐 Agent and VaultMind combines your private vault with live web search for questions your docs can't answer alone.
 
 ---
 
-## The Idea
-
-Every SaaS product you pay for is three things: a database, a UI, and a way to query your data. You're paying Salesforce $150/month because it can answer *"who are my hot leads"* — but YOUR data is doing all the work.
-
-VaultMind cuts them out. Export your data from any app, drop it in, and ask questions in plain English. Your data stays on your hardware. Forever.
-
-**Stop renting access to your own data.**
-
----
-
-## What You Can Do With It
-
-### Replace SaaS query layers
-- **Salesforce / HubSpot** → export contacts + notes as CSV, ask *"who haven't I followed up with in 30 days?"*
-- **QuickBooks / Intuit** → export transactions, ask *"what's my average monthly revenue this year?"*
-- **Notion** → export your workspace, ask *"what did I decide about X last month?"*
-- **Gmail** → Google Takeout export, ask *"what did my lawyer say about the contract?"*
-
-### Build a private intelligence database
-- Drop in competitor research, market reports, industry docs
-- Index your own playbooks, SOPs, methodologies
-- Query your own expertise: *"what's my sourcing strategy for passive candidates?"*
-- Feed it URLs — scrape any webpage and make it searchable instantly
-
-### Use URL ingestion as a research tool
-Paste any URL and VaultMind indexes it. Use cases:
-- **Recruiting**: scrape LinkedIn profiles, job boards, company pages — ask *"find me data engineers in Irvine"* using your own sourcing playbooks as context
-- **Sales**: index a prospect's website before a call — ask *"what are their main products and who do they sell to?"*
-- **Research**: index articles, docs, competitor pages — ask anything across all of them
-- **Due diligence**: build a private research file on any company
-
----
-
-## Quick Start
-
-**Requirements**: [Ollama](https://ollama.ai) installed and running
-
-```bash
-# 1. Clone
-git clone https://github.com/air-blackbox/vaultmind.git
-cd vaultmind
-
-# 2. Run the launcher — handles everything automatically
-bash start.sh
-```
-
-`start.sh` checks for Ollama, pulls the required models, installs dependencies, starts the backend, and opens the UI. One command, done.
-
----
-
-## Supported Input Types
-
-| Type | Formats | How to get your data |
-|------|---------|---------------------|
-| Documents | PDF, DOCX, TXT, MD | Direct upload |
-| Spreadsheets | CSV | Export from any app |
-| Web pages | Any URL | Paste and index instantly |
-| CRM data | CSV export | Salesforce, HubSpot, etc. |
-| Email | Export to TXT/MD | Gmail Takeout, Mail export |
-| Financial | CSV export | QuickBooks, Stripe, etc. |
-
----
-
-## Architecture
+## How It Works
 
 ```
-Any file or URL
-      │
-      ▼
-Text extraction (pypdf / python-docx / BeautifulSoup)
-      │
-      ▼
-chunk_text() — 150-word chunks, 20-word overlap
-      │
-      ▼
-nomic-embed-text (Ollama) — local embeddings, no API
-      │
-      ▼
-ChromaDB — persistent vector store on disk
-      │
-      ▼
-User query → embed → similarity search → top 6 chunks
-      │
-      ▼
-llama3.2 (Ollama) — streamed response with conversation memory
+Files / URLs / Gmail / Notion
+           │
+           ▼
+    Text extraction
+  (pypdf · python-docx · BS4)
+           │
+           ▼
+   150-word chunks, 20-word overlap
+           │
+           ▼
+  nomic-embed-text (local, via Ollama)
+           │
+           ▼
+    ChromaDB on disk
+           │
+           ▼
+  Query → embed → top-k similarity search
+           │
+           ▼
+  Mistral / Llama / Phi / Gemma (your choice)
+           │
+           ▼
+      Streamed answer
 ```
 
-100% local. The API is FastAPI on `localhost:8000`. The UI is a single HTML file.
+100% local. The API is FastAPI on `localhost:8000`. The UI is a single HTML file — no framework, no build step.
 
 ---
 
 ## Stack
 
 | Layer | Tool |
-|-------|------|
-| LLM inference | [Ollama](https://ollama.ai) (llama3.2) |
-| Embeddings | nomic-embed-text via Ollama |
-| Vector store | [ChromaDB](https://www.trychroma.com) — persists on disk |
-| Backend | FastAPI + streaming responses |
-| Frontend | Vanilla JS — no framework, no build step |
+|---|---|
+| LLM + embeddings | [Ollama](https://ollama.ai) |
+| Vector store | [ChromaDB](https://www.trychroma.com) |
+| Backend | FastAPI + streaming SSE |
+| Frontend | Vanilla JS — zero dependencies |
 | Document parsing | pypdf, python-docx, BeautifulSoup |
+| Gmail | Google OAuth 2.0 (readonly) |
+| Desktop app | Electron (Mac) |
 
 ---
 
-## Why Local-First
+## Supported Models
 
-Cloud AI tools require you to upload your data to their servers. Your contracts, your financials, your candidate research, your private notes — on someone else's machine, under someone else's terms of service.
+Switch models any time from the sidebar dropdown. All run locally via Ollama.
 
-VaultMind doesn't work that way. The models run on your hardware via Ollama. The vector database lives on your disk. Nothing is transmitted anywhere.
-
-Same philosophy as [AIR Blackbox](https://airblackbox.ai): your data stays where you put it.
-
----
-
-## Roadmap
-
-- [ ] `.mbox` / Gmail Takeout email ingestion
-- [ ] Apple Health export parsing
-- [ ] Bulk URL ingestion (paste a list, index them all)
-- [ ] Timeline view — *"what happened in March 2025?"*
-- [ ] One-command Docker setup
-- [ ] Multi-user / household support
-- [ ] Voice input
+- **Mistral 7B** — fast, good all-rounder (default)
+- **Llama 3.2** — strong reasoning
+- **Phi-3 Mini** — lightweight, great on older hardware
+- **Gemma 2** — Google's open model
+- **Qwen 2.5** — strong on technical content
+- **DeepSeek R1** — best for complex analysis
 
 ---
 
-## Use with OpenClaw
+## Mac App
 
-VaultMind works as an [OpenClaw](https://github.com/openclaw/clawhub) skill — giving OpenClaw a long-term memory layer over your personal documents.
-
-Once installed, you can ask OpenClaw via WhatsApp, Telegram, or iMessage:
-
-> "What are the payment terms in my freelance contract?"
-> "Summarize my website audit from last month."
-> "What's my current data engineer salary range based on my resume?"
-
-OpenClaw routes the question to VaultMind's local RAG pipeline. The answer comes from your indexed docs. Nothing leaves your machine.
-
-**Install the skill:**
+VaultMind ships as a native Electron app — no Terminal required.
 
 ```bash
-# Copy the skill folder into your OpenClaw skills directory
-cp -r openclaw-skill ~/.openclaw/skills/vaultmind
+npm install
+npm start          # dev mode
+bash build-app.sh  # builds distributable .dmg
 ```
 
-Then ask OpenClaw to activate it: *"activate the vaultmind skill"*
+First launch automatically creates a Python virtualenv and installs dependencies. Subsequent launches skip straight to the app. User data lives in `~/Library/Application Support/VaultMind/data` — safe across app updates.
 
-The skill folder is in `openclaw-skill/SKILL.md` in this repo.
+---
+
+## Access From Your Phone
+
+VaultMind runs in any browser. On your local network:
+
+```bash
+ipconfig getifaddr en0   # find your Mac's IP
+# open http://192.168.x.x:8000 on your phone
+```
+
+From anywhere via [Tailscale](https://tailscale.com) (free, 5 min setup):
+
+1. Install Tailscale on your Mac and phone, sign in with the same account
+2. Open `http://100.x.x.x:8000` from anywhere — stays completely private
+
+Tap **Add to Home Screen** in Safari to install as a PWA.
+
+---
+
+## What's Built
+
+- [x] PDF, DOCX, TXT, MD, CSV upload
+- [x] URL ingestion (scrape any page)
+- [x] Gmail OAuth — index inbox locally
+- [x] Notion sync — auto-polls on configurable schedule
+- [x] Agent mode — vault + live web search
+- [x] Inbox digest — AI-ranked email summary
+- [x] 6 local model choices
+- [x] Electron Mac app
+- [x] Docker support
+- [x] Mobile-responsive PWA
+
+## What's Next
+
+- [ ] Slack integration
+- [ ] WhatsApp conversation export
+- [ ] Bulk URL ingestion
+- [ ] Timeline view — *"what happened in March?"*
+- [ ] MCP server — use VaultMind as context inside Cursor / VS Code
 
 ---
 
 ## Contributing
 
-Apache 2.0. PRs welcome. Open an issue if something breaks.
+Apache 2.0. PRs welcome.
 
 ```bash
+# Backend dev mode (hot reload)
 cd backend && uvicorn main:app --reload --port 8000
+
+# Frontend is at http://localhost:8000 — edit frontend/index.html directly
 ```
+
+Open an issue for bugs. Open a discussion for feature ideas.
 
 ---
 
-*Part of the [AIR Blackbox](https://github.com/air-blackbox) ecosystem.*
+*Built by [Jason Shotwell](https://github.com/airblackbox). Part of the [AIR Blackbox](https://airblackbox.ai) ecosystem.*
