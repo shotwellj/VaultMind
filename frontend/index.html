@@ -319,6 +319,7 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
         <span>📌 Pinned to this source — answers will only use this item</span>
         <button onclick="clearPin()" style="background:none;border:none;color:#444;cursor:pointer;font-size:12px;padding:0;margin-left:auto;line-height:1" title="Clear pin">✕</button>
       </div>
+      <div id="quick-actions" style="display:none;padding:6px 20px 0;gap:6px;flex-wrap:wrap;flex-shrink:0"></div>
       <div class="bar">
         <button class="mode-btn" id="mode-btn">🔒 Vault</button>
         <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
@@ -1041,7 +1042,32 @@ async function updateConnectorBar() {
       badge.onclick     = () => toggleFeedFilter(c.id);
       bar.appendChild(badge);
     });
+
+    // Update quick-action chips in the chat panel
+    updateQuickActions(gmailSt.connected === true);
   } catch {}
+}
+
+function updateQuickActions(gmailConnected) {
+  const qa = document.getElementById('quick-actions');
+  if (!qa) return;
+  qa.innerHTML = '';
+  if (!gmailConnected) { qa.style.display = 'none'; return; }
+  qa.style.display = 'flex';
+
+  const chips = [
+    { label: '📧 Summarize Inbox', action: () => summarizeInbox() },
+    { label: '🔴 Action items only', action: () => { qEl.value = 'What emails need action from me today?'; qEl.focus(); } },
+    { label: '📋 Any interviews?', action: () => { qEl.value = 'Do I have any job applications or interviews in my emails?'; qEl.focus(); } },
+  ];
+  chips.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className   = 'feed-refresh-btn';
+    btn.textContent = c.label;
+    btn.style.cssText = 'font-size:11px;padding:4px 10px';
+    btn.onclick = c.action;
+    qa.appendChild(btn);
+  });
 }
 
 // ── Chat ──────────────────────────────────────────────────────

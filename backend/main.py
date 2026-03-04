@@ -729,11 +729,25 @@ class ChatMessage(BaseModel):
     model:         str = "mistral"
     pinned_source: str = ""   # when set, restrict retrieval to this exact source
 
+EMAIL_KEYWORDS = {"email", "emails", "inbox", "gmail", "mail", "summarize my day",
+                  "what did i get", "any messages", "any emails", "check my email"}
+
 @app.post("/chat")
 async def chat(msg: ChatMessage):
-    col                = get_collection(msg.workspace)
     chat_model         = msg.model or DEFAULT_MODEL
     question_embedding = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
+
+    # Smart workspace routing: if the query is about emails and the user isn't
+    # already in a Gmail-type workspace, transparently switch to it
+    col = get_collection(msg.workspace)
+    msg_lower = msg.message.lower()
+    if not msg.pinned_source and any(kw in msg_lower for kw in EMAIL_KEYWORDS):
+        cfg = load_config()
+        gmail_ws = cfg.get("gmail", {}).get("workspace", "Gmail")
+        if gmail_ws != msg.workspace:
+            gmail_col = get_collection(gmail_ws)
+            if gmail_col.count() > 0:
+                col = gmail_col   # transparently route to Gmail workspace
 
     # If the user clicked a specific feed item, pin retrieval to that source only
     if msg.pinned_source:
