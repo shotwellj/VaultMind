@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -9,6 +9,7 @@ import os
 import uuid
 import json
 import io
+import base64
 import requests
 import chromadb
 import ollama
@@ -18,10 +19,29 @@ from bs4 import BeautifulSoup
 from ddgs import DDGS
 from datetime import datetime, timezone
 
+# Allow OAuth over localhost (no HTTPS required)
+os.environ.setdefault('OAUTHLIB_INSECURE_TRANSPORT', '1')
+
+# Optional Google auth — app works without it, Gmail just won't be available
+try:
+    from google.oauth2.credentials import Credentials as GoogleCredentials
+    from google_auth_oauthlib.flow import Flow as GoogleFlow
+    from google.auth.transport.requests import Request as GoogleRequest
+    from googleapiclient.discovery import build as google_build
+    GOOGLE_AUTH_OK = True
+except ImportError:
+    GOOGLE_AUTH_OK = False
+    print("⚠️  Google auth not installed. Run: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
+
 # ── Config / Feed file paths ──────────────────────────────────
-BASE_DIR    = os.path.dirname(__file__)
-CONFIG_FILE = os.path.join(BASE_DIR, "connector_config.json")
-FEED_FILE   = os.path.join(BASE_DIR, "feed_events.json")
+BASE_DIR         = os.path.dirname(__file__)
+CONFIG_FILE      = os.path.join(BASE_DIR, "connector_config.json")
+FEED_FILE        = os.path.join(BASE_DIR, "feed_events.json")
+
+# ── Gmail paths ───────────────────────────────────────────────
+GMAIL_SCOPES     = ['https://www.googleapis.com/auth/gmail.readonly']
+GMAIL_TOKEN_FILE = os.path.join(BASE_DIR, "gmail_token.json")
+GMAIL_CREDS_FILE = os.path.join(BASE_DIR, "gmail_credentials.json")
 
 # ── Connector config helpers ──────────────────────────────────
 
@@ -152,6 +172,87 @@ def sync_notion_now(notion_cfg: dict):
     print(f"✅ Notion sync complete — {synced} new pages indexed")
     return synced
 
+# ── Gmail helpers ─────────────────────────────────────────────
+
+def get_gmail_service():
+    """Return authenticated Gmail API service, refreshing token if expired."""
+    if not GOOGLE_AUTH_OK or not os.path.exists(GMAIL_TOKEN_FILE):
+        return None
+    try:
+        creds = GoogleCredentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            with open(GMAIL_TOKEN_FILE, 'w') as f:
+                f.write(creds.to_json())
+        return google_build('gmail', 'v1', credentials=creds) if creds and creds.valid else None
+    except Exception as e:
+        print(f"Gmail auth error: {e}")
+        return None
+
+def decode_email_body(payload: dict) -> str:
+    """Extract plain-text body from a Gmail message payload."""
+    data = payload.get('body', {}).get('data', '')
+    if data:
+        return base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+    for part in payload.get('parts', []):
+        if part.get('mimeType') == 'text/plain':
+            data = part.get('body', {}).get('data', '')
+            if data:
+                return base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+    return ''
+
+def extract_email_text(msg_data: dict) -> tuple[str, str]:
+    """Return (subject, full_text) from a Gmail message."""
+    headers = msg_data.get('payload', {}).get('headers', [])
+    subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+    sender  = next((h['value'] for h in headers if h['name'].lower() == 'from'), '')
+    date    = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
+    body    = decode_email_body(msg_data.get('payload', {}))
+    full    = f"From: {sender}\nDate: {date}\nSubject: {subject}\n\n{body[:3000]}"
+    return subject, full
+
+def sync_gmail_now(gmail_cfg: dict, max_emails: int = 100) -> int:
+    """Fetch and index recent inbox emails. Returns count of newly indexed emails."""
+    service = get_gmail_service()
+    if not service:
+        return 0
+    workspace = gmail_cfg.get('workspace', 'Gmail')
+    col       = get_collection(workspace)
+    synced    = 0
+    try:
+        results  = service.users().messages().list(
+            userId='me', maxResults=max_emails, q='is:inbox -is:spam'
+        ).execute()
+        messages = results.get('messages', [])
+    except Exception as e:
+        print(f"Gmail list error: {e}")
+        return 0
+    for msg in messages:
+        msg_id   = msg['id']
+        source   = f"gmail:{msg_id}"
+        existing = col.get(where={"source": source}, include=["metadatas"])
+        if existing["ids"]:
+            continue
+        try:
+            msg_data           = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+            subject, full_text = extract_email_text(msg_data)
+            if not full_text.strip():
+                continue
+            chunks = chunk_text(full_text)
+            embed_and_store(chunks, source, col)
+            log_feed_event(subject, workspace, len(chunks), "gmail", source)
+            synced += 1
+            print(f"  📧 Gmail: indexed '{subject[:50]}'")
+        except Exception as e:
+            print(f"Gmail message error {msg_id}: {e}")
+    cfg = load_config()
+    if "gmail" not in cfg:
+        cfg["gmail"] = {}
+    cfg["gmail"]["last_synced"] = datetime.now(timezone.utc).isoformat()
+    save_config(cfg)
+    print(f"✅ Gmail sync complete — {synced} new emails indexed")
+    return synced
+
 # ── Background polling loop ───────────────────────────────────
 
 async def polling_loop():
@@ -177,6 +278,23 @@ async def polling_loop():
                 if should_sync:
                     print("🔄 Polling Notion...")
                     await asyncio.to_thread(sync_notion_now, notion)
+
+            # Gmail
+            gmail = cfg.get("gmail", {})
+            if gmail.get("enabled") and gmail.get("connected"):
+                interval_min = gmail.get("poll_interval_minutes", 30)
+                last_synced  = gmail.get("last_synced")
+                should_sync  = True
+                if last_synced:
+                    try:
+                        last_dt     = datetime.fromisoformat(last_synced)
+                        elapsed     = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60
+                        should_sync = elapsed >= interval_min
+                    except Exception:
+                        pass
+                if should_sync:
+                    print("🔄 Polling Gmail...")
+                    await asyncio.to_thread(sync_gmail_now, gmail)
 
         except Exception as e:
             print(f"Polling loop error: {e}")
@@ -469,7 +587,129 @@ async def manual_sync(connector: str):
             return {"error": "Notion token not configured"}
         synced = await asyncio.to_thread(sync_notion_now, notion_cfg)
         return {"message": f"Notion sync complete — {synced} new pages indexed", "synced": synced}
+    if connector == "gmail":
+        gmail_cfg = cfg.get("gmail", {})
+        if not gmail_cfg.get("connected"):
+            return {"error": "Gmail not connected. Authorize first via ⚙️ settings."}
+        synced = await asyncio.to_thread(sync_gmail_now, gmail_cfg)
+        return {"message": f"Gmail sync complete — {synced} new emails indexed", "synced": synced}
     return {"error": f"Unknown connector: {connector}"}
+
+# ── Gmail OAuth ────────────────────────────────────────────────
+
+class GmailOAuthConfig(BaseModel):
+    client_id:             str
+    client_secret:         str
+    workspace:             str = "Gmail"
+    poll_interval_minutes: int = 30
+
+@app.post("/auth/gmail/configure")
+async def configure_gmail(data: GmailOAuthConfig):
+    """Save Google OAuth client credentials so the auth flow can begin."""
+    if not GOOGLE_AUTH_OK:
+        return {"error": "Google auth libraries not installed. Restart backend after: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client"}
+    creds_data = {
+        "installed": {
+            "client_id":     data.client_id.strip(),
+            "client_secret": data.client_secret.strip(),
+            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
+            "token_uri":     "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost:8000/auth/gmail/callback"]
+        }
+    }
+    with open(GMAIL_CREDS_FILE, 'w') as f:
+        json.dump(creds_data, f)
+    cfg = load_config()
+    cfg["gmail"] = cfg.get("gmail", {})
+    cfg["gmail"]["workspace"]             = data.workspace
+    cfg["gmail"]["poll_interval_minutes"] = data.poll_interval_minutes
+    save_config(cfg)
+    get_collection(data.workspace)
+    return {"message": "Gmail credentials saved"}
+
+@app.get("/auth/gmail")
+async def gmail_auth_start():
+    """Return the Google OAuth URL for the frontend to open."""
+    if not GOOGLE_AUTH_OK:
+        return {"error": "Google auth libraries not installed"}
+    if not os.path.exists(GMAIL_CREDS_FILE):
+        return {"error": "Save your Client ID and Secret first"}
+    try:
+        flow     = GoogleFlow.from_client_secrets_file(
+            GMAIL_CREDS_FILE, scopes=GMAIL_SCOPES,
+            redirect_uri="http://localhost:8000/auth/gmail/callback"
+        )
+        auth_url, _ = flow.authorization_url(
+            access_type='offline', include_granted_scopes='true', prompt='consent'
+        )
+        return {"auth_url": auth_url}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/auth/gmail/callback")
+async def gmail_auth_callback(code: str = Query(default=""), error: str = Query(default="")):
+    """Handle Google OAuth redirect — saves token and shows a close-tab page."""
+    if error:
+        return HTMLResponse(f"""
+<html><body style="font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
+<div><div style="font-size:48px">❌</div><h2>Authorization failed</h2>
+<p style="color:#666">{error}</p>
+<script>setTimeout(()=>window.close(),3000)</script></div></body></html>""")
+    if not code or not os.path.exists(GMAIL_CREDS_FILE):
+        return HTMLResponse("<p>Missing code or credentials file. Close this tab and try again.</p>")
+    try:
+        flow = GoogleFlow.from_client_secrets_file(
+            GMAIL_CREDS_FILE, scopes=GMAIL_SCOPES,
+            redirect_uri="http://localhost:8000/auth/gmail/callback"
+        )
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        with open(GMAIL_TOKEN_FILE, 'w') as f:
+            f.write(creds.to_json())
+        cfg = load_config()
+        cfg["gmail"]              = cfg.get("gmail", {})
+        cfg["gmail"]["connected"] = True
+        cfg["gmail"]["enabled"]   = True
+        save_config(cfg)
+        return HTMLResponse("""
+<html><body style="font-family:-apple-system,sans-serif;background:#0f0f0f;color:#e0e0e0;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
+<div>
+  <div style="font-size:64px">✅</div>
+  <h2 style="font-weight:700;margin:16px 0 8px">Gmail connected!</h2>
+  <p style="color:#666">You can close this tab.</p>
+  <script>setTimeout(()=>{try{window.close()}catch(e){}},1500)</script>
+</div></body></html>""")
+    except Exception as e:
+        return HTMLResponse(f"<p>Error: {e}<br>Close this tab and try again.</p>")
+
+@app.get("/auth/gmail/status")
+async def gmail_auth_status():
+    """Check if a valid Gmail token exists."""
+    if not GOOGLE_AUTH_OK or not os.path.exists(GMAIL_TOKEN_FILE):
+        return {"connected": False}
+    try:
+        creds = GoogleCredentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+        if creds and (creds.valid or (creds.expired and creds.refresh_token)):
+            return {"connected": True}
+    except Exception:
+        pass
+    return {"connected": False}
+
+@app.post("/auth/gmail/disconnect")
+async def gmail_disconnect():
+    """Remove Gmail token and mark as disconnected."""
+    if os.path.exists(GMAIL_TOKEN_FILE):
+        os.remove(GMAIL_TOKEN_FILE)
+    if os.path.exists(GMAIL_CREDS_FILE):
+        os.remove(GMAIL_CREDS_FILE)
+    cfg = load_config()
+    if "gmail" in cfg:
+        cfg["gmail"]["connected"] = False
+        cfg["gmail"]["enabled"]   = False
+        save_config(cfg)
+    return {"message": "Gmail disconnected"}
 
 @app.delete("/connectors/{connector}")
 async def delete_connector(connector: str):

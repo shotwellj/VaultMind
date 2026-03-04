@@ -378,14 +378,62 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
 
       <div class="modal-divider"></div>
 
+      <!-- Gmail -->
+      <div class="connector-section">
+        <div class="connector-head">
+          <div class="connector-name">
+            <span class="connector-icon">📧</span>
+            <div><div class="connector-label">Gmail</div><div class="connector-sub">Index inbox emails to your vault</div></div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="gmail-enabled"><span class="toggle-slider"></span></label>
+        </div>
+
+        <!-- Setup state -->
+        <div id="gmail-setup" class="connector-fields">
+          <div class="field-row">
+            <label class="field-label">Google OAuth Client ID</label>
+            <input class="field-input" type="text" id="gmail-client-id" placeholder="123456789-abc…apps.googleusercontent.com">
+            <span class="field-hint">
+              1. Go to <a href="https://console.cloud.google.com/" target="_blank">console.cloud.google.com</a><br>
+              2. Create project → APIs &amp; Services → Enable Gmail API<br>
+              3. Credentials → Create OAuth 2.0 Client ID → Desktop app<br>
+              4. Add <code style="background:#1a1a1a;padding:1px 5px;border-radius:4px;font-size:10px">http://localhost:8000/auth/gmail/callback</code> as redirect URI
+            </span>
+          </div>
+          <div class="field-row">
+            <label class="field-label">Client Secret</label>
+            <input class="field-input" type="password" id="gmail-client-secret" placeholder="GOCSPX-…">
+          </div>
+          <div class="field-row">
+            <label class="field-label">Workspace Name</label>
+            <input class="field-input" type="text" id="gmail-workspace" placeholder="Gmail" value="Gmail">
+            <span class="field-hint">Emails will be indexed into this workspace.</span>
+          </div>
+          <div class="connector-actions">
+            <button class="btn-save" onclick="connectGmail()">🔑 Connect Gmail</button>
+          </div>
+          <div class="sync-status" id="gmail-connect-status"></div>
+        </div>
+
+        <!-- Connected state -->
+        <div id="gmail-connected" style="display:none">
+          <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0f1f0f;border:1px solid #1a3a1a;border-radius:8px;margin-bottom:12px">
+            <span>✅</span>
+            <span style="font-size:13px;color:#22c55e;font-weight:500">Gmail connected</span>
+          </div>
+          <div class="connector-actions">
+            <button class="btn-sync" id="gmail-sync-btn" onclick="syncGmail()">↻ Sync Now</button>
+            <button class="btn-sync" onclick="disconnectGmail()" style="color:#ef4444;border-color:#3a1a1a">Disconnect</button>
+          </div>
+          <div class="sync-status" id="gmail-sync-status"></div>
+        </div>
+      </div>
+
+      <div class="modal-divider"></div>
+
       <!-- Coming soon -->
       <div style="margin-bottom:10px">
         <div class="field-label" style="margin-bottom:12px">Coming Soon</div>
-        <div class="coming-soon-section">
-          <span class="cs-icon">📧</span>
-          <div><div class="cs-label">Gmail</div><div class="cs-sub">Index emails and threads</div></div>
-          <span class="cs-pill">Soon</span>
-        </div>
         <div class="coming-soon-section">
           <span class="cs-icon">💬</span>
           <div><div class="cs-label">Slack</div><div class="cs-sub">Index channels and DMs</div></div>
@@ -471,12 +519,27 @@ document.getElementById('settings-modal').onclick = e => { if (e.target.id === '
 
 async function loadConnectorConfig() {
   try {
-    const d = await fetch(`${API}/connectors`).then(r => r.json());
+    const [d, gmailSt] = await Promise.all([
+      fetch(`${API}/connectors`).then(r => r.json()),
+      fetch(`${API}/auth/gmail/status`).then(r => r.json()).catch(() => ({connected: false}))
+    ]);
     const notion = d.connectors?.notion || {};
-    document.getElementById('notion-enabled').checked   = notion.enabled  || false;
-    document.getElementById('notion-workspace').value   = notion.workspace || 'Notion';
-    document.getElementById('notion-interval').value    = notion.poll_interval_minutes || 15;
-    // Don't prefill token (masked)
+    document.getElementById('notion-enabled').checked = notion.enabled  || false;
+    document.getElementById('notion-workspace').value = notion.workspace || 'Notion';
+    document.getElementById('notion-interval').value  = notion.poll_interval_minutes || 15;
+
+    // Gmail — show connected vs setup state
+    if (gmailSt.connected) {
+      document.getElementById('gmail-setup').style.display     = 'none';
+      document.getElementById('gmail-connected').style.display = 'block';
+      document.getElementById('gmail-enabled').checked         = true;
+    } else {
+      const gmailCfg = d.connectors?.gmail || {};
+      document.getElementById('gmail-workspace').value         = gmailCfg.workspace || 'Gmail';
+      document.getElementById('gmail-setup').style.display     = 'block';
+      document.getElementById('gmail-connected').style.display = 'none';
+      document.getElementById('gmail-enabled').checked         = false;
+    }
   } catch {}
 }
 
@@ -745,18 +808,92 @@ async function loadFeed() {
   } catch {}
 }
 
+// ── Gmail ─────────────────────────────────────────────────────
+async function connectGmail() {
+  const clientId     = document.getElementById('gmail-client-id').value.trim();
+  const clientSecret = document.getElementById('gmail-client-secret').value.trim();
+  const workspace    = document.getElementById('gmail-workspace').value.trim() || 'Gmail';
+  const sts          = document.getElementById('gmail-connect-status');
+  if (!clientId || !clientSecret) { toast('❌ Enter Client ID and Secret', true); return; }
+
+  sts.textContent = '💾 Saving credentials…';
+  try {
+    const d = await fetch(`${API}/auth/gmail/configure`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({client_id: clientId, client_secret: clientSecret, workspace})
+    }).then(r => r.json());
+    if (d.error) { sts.textContent = `❌ ${d.error}`; return; }
+
+    sts.textContent = '🔑 Opening Google authorization…';
+    const authData = await fetch(`${API}/auth/gmail`).then(r => r.json());
+    if (authData.error) { sts.textContent = `❌ ${authData.error}`; return; }
+
+    window.open(authData.auth_url, '_blank');
+    sts.textContent = '⏳ Waiting for Google authorization in the new tab…';
+
+    // Poll until token appears
+    let polls = 0;
+    const poll = setInterval(async () => {
+      polls++;
+      if (polls > 60) { clearInterval(poll); sts.textContent = '❌ Timed out — try again.'; return; }
+      const st = await fetch(`${API}/auth/gmail/status`).then(r => r.json()).catch(() => ({connected:false}));
+      if (st.connected) {
+        clearInterval(poll);
+        sts.textContent = '';
+        document.getElementById('gmail-setup').style.display     = 'none';
+        document.getElementById('gmail-connected').style.display = 'block';
+        document.getElementById('gmail-enabled').checked         = true;
+        toast('✅ Gmail connected!');
+        updateConnectorBar();
+        if (workspace && ![...wsSelect.options].some(o => o.value === workspace)) {
+          const opt = document.createElement('option');
+          opt.value = workspace; opt.textContent = workspace;
+          wsSelect.appendChild(opt);
+        }
+      }
+    }, 2000);
+  } catch(e) { sts.textContent = `❌ ${e.message}`; }
+}
+
+async function syncGmail() {
+  const btn = document.getElementById('gmail-sync-btn');
+  const sts = document.getElementById('gmail-sync-status');
+  btn.disabled = true; sts.textContent = '🔄 Syncing Gmail…';
+  try {
+    const d = await fetch(`${API}/connectors/gmail/sync`, {method:'POST'}).then(r => r.json());
+    if (d.error) { sts.textContent = `❌ ${d.error}`; toast(`❌ ${d.error}`, true); }
+    else { sts.textContent = `✅ ${d.message}`; toast(`✅ ${d.message}`); loadFeed(); ping(); }
+  } catch { sts.textContent = '❌ Sync failed'; toast('❌ Sync failed', true); }
+  btn.disabled = false;
+}
+
+async function disconnectGmail() {
+  if (!confirm('Disconnect Gmail? You can reconnect any time.')) return;
+  await fetch(`${API}/auth/gmail/disconnect`, {method:'POST'});
+  document.getElementById('gmail-setup').style.display     = 'block';
+  document.getElementById('gmail-connected').style.display = 'none';
+  document.getElementById('gmail-enabled').checked         = false;
+  toast('Gmail disconnected');
+  updateConnectorBar();
+}
+
 async function updateConnectorBar() {
   try {
-    const d   = await fetch(`${API}/connectors`).then(r => r.json());
-    const bar = document.getElementById('connector-bar');
-    bar.innerHTML = '';
+    const [d, gmailSt] = await Promise.all([
+      fetch(`${API}/connectors`).then(r => r.json()),
+      fetch(`${API}/auth/gmail/status`).then(r => r.json()).catch(() => ({connected:false}))
+    ]);
+    const bar        = document.getElementById('connector-bar');
+    bar.innerHTML    = '';
     const connectors = d.connectors || {};
-    const all = [{id:'notion',label:'Notion',icon:'📓'},{id:'gmail',label:'Gmail',icon:'📧'},{id:'slack',label:'Slack',icon:'💬'}];
+    const all = [
+      {id:'notion',  label:'Notion',  icon:'📓', active: connectors.notion?.enabled === true},
+      {id:'gmail',   label:'Gmail',   icon:'📧', active: gmailSt.connected === true},
+      {id:'slack',   label:'Slack',   icon:'💬', active: false},
+    ];
     all.forEach(c => {
-      const cfg    = connectors[c.id] || {};
-      const active = cfg.enabled === true;
-      const badge  = document.createElement('div');
-      badge.className = `connector-badge ${active ? 'active' : ''}`;
+      const badge     = document.createElement('div');
+      badge.className = `connector-badge ${c.active ? 'active' : ''}`;
       badge.innerHTML = `<span class="dot"></span>${c.icon} ${c.label}`;
       bar.appendChild(badge);
     });
