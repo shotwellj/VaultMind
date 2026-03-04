@@ -331,7 +331,10 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
       <div class="feed-panel" id="feed-list">
         <div class="feed-header">
           <div class="feed-title-row"><span class="feed-title">All Sources — Live Feed</span></div>
-          <button class="feed-refresh-btn" onclick="loadFeed()">↻ Refresh</button>
+          <div style="display:flex;gap:6px">
+            <button class="feed-refresh-btn" id="digest-btn" onclick="summarizeInbox()" title="AI reads all your emails and ranks them by importance">📧 Summarize Inbox</button>
+            <button class="feed-refresh-btn" onclick="loadFeed()">↻ Refresh</button>
+          </div>
         </div>
         <div class="feed-connector-bar" id="connector-bar"></div>
         <div class="feed-empty" id="feed-empty">
@@ -866,6 +869,76 @@ function toggleFeedFilter(connectorId) {
   filterConnector = filterConnector === connectorId ? null : connectorId;
   updateConnectorBar();
   loadFeed();
+}
+
+// ── Inbox Digest ──────────────────────────────────────────────
+async function summarizeInbox() {
+  const btn = document.getElementById('digest-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Reading emails…';
+
+  // Figure out which Gmail workspace is connected
+  let gmailWorkspace = 'Gmail';
+  try {
+    const cfg = await fetch(`${API}/connectors`).then(r => r.json());
+    gmailWorkspace = cfg.connectors?.gmail?.workspace || 'Gmail';
+  } catch {}
+
+  // Switch to chat tab and set up the bot response bubble
+  switchTab('chat');
+  document.getElementById('empty')?.remove();
+
+  const botEl  = document.createElement('div'); botEl.className = 'msg-bot';
+  const bubble = document.createElement('div'); bubble.className = 'bubble';
+  const cursor = document.createElement('span'); cursor.className = 'cursor';
+  bubble.textContent = '📧 Reading your inbox…';
+  bubble.appendChild(cursor);
+  botEl.appendChild(bubble);
+  msgsEl.appendChild(botEl);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+
+  let fullText = '';
+  try {
+    const res = await fetch(`${API}/digest`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ workspace: gmailWorkspace, connector: 'gmail', model: currentModel })
+    });
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const lines = buf.split('\n'); buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.token) {
+            fullText += data.token;
+            bubble.textContent = stripMarkdown(fullText);
+            bubble.appendChild(cursor);
+            msgsEl.scrollTop = msgsEl.scrollHeight;
+          }
+          if (data.done) {
+            cursor.remove();
+            const s = document.createElement('div');
+            s.className = 'src';
+            s.textContent = `Digest from ${data.sources?.length || 0} emails`;
+            botEl.appendChild(s);
+          }
+        } catch {}
+      }
+    }
+  } catch(e) {
+    cursor.remove();
+    bubble.textContent = 'Could not generate digest — is VaultMind running?';
+  }
+
+  btn.disabled = false;
+  btn.textContent = '📧 Summarize Inbox';
+  msgsEl.scrollTop = msgsEl.scrollHeight;
 }
 
 // ── Gmail ─────────────────────────────────────────────────────

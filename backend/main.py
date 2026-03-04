@@ -787,6 +787,87 @@ async def chat(msg: ChatMessage):
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+# ── Inbox Digest ──────────────────────────────────────────────
+
+class DigestRequest(BaseModel):
+    workspace: str = "Gmail"
+    connector: str = "gmail"   # source prefix to filter on
+    model:     str = "mistral"
+
+@app.post("/digest")
+async def digest(req: DigestRequest):
+    """Retrieve ALL emails from a connector, group by source, and stream a ranked summary."""
+    col = get_collection(req.workspace)
+
+    # Pull every chunk in this workspace and keep only the target connector's
+    all_results = col.get(include=["documents", "metadatas"])
+    prefix = f"{req.connector}:"
+
+    # Group chunks by source — first chunk of each email has the From/Date/Subject header
+    emails: dict[str, list[str]] = {}
+    for doc, meta in zip(all_results["documents"], all_results["metadatas"]):
+        src = meta.get("source", "")
+        if src.startswith(prefix):
+            if src not in emails:
+                emails[src] = []
+            emails[src].append(doc)
+
+    if not emails:
+        def no_emails():
+            yield f"data: {json.dumps({'token': 'No Gmail emails are indexed yet. Open Settings → Gmail and click Sync Now to pull your inbox.'})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
+        return StreamingResponse(no_emails(), media_type="text/event-stream")
+
+    # Build compact per-email context: first chunk only (has From/Date/Subject + opening lines)
+    # Cap at 40 emails to stay within local model context limits (~4k tokens)
+    email_blocks = []
+    for src, chunks in list(emails.items())[:40]:
+        email_blocks.append(chunks[0])
+
+    context = "\n\n---EMAIL---\n\n".join(email_blocks)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a personal AI assistant acting as an executive email briefer.\n"
+                "The user's indexed inbox emails are below, separated by ---EMAIL---.\n\n"
+                "Your job:\n"
+                "1. Write a 2-sentence plain-English summary of the overall inbox (what kind of day is it?)\n"
+                "2. Stack-rank every email from most to least important\n"
+                "3. Format each ranked item as:\n"
+                "   [PRIORITY] Subject — one sentence on what action (if any) is needed\n\n"
+                "Priority levels — pick one per email:\n"
+                "🔴 ACTION REQUIRED — interviews, job offers, payments due, verification codes, deadlines\n"
+                "🟡 READ TODAY — newsletters, updates, replies worth reading\n"
+                "⚫ LOW — promotions, marketing, automated digests, receipts\n\n"
+                "Rules:\n"
+                "- Be brutally concise. One line per email.\n"
+                "- Put 🔴 items at the top, ⚫ at the bottom.\n"
+                "- Do NOT use markdown bold or headers. Plain text only.\n"
+                "- Do NOT invent content not present in the emails.\n\n"
+                f"EMAILS:\n{context}"
+            )
+        },
+        {
+            "role": "user",
+            "content": "Summarize my inbox and tell me what to focus on today."
+        }
+    ]
+
+    chat_model = req.model or DEFAULT_MODEL
+
+    def generate():
+        stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
+        for chunk in stream:
+            token = chunk["message"]["content"]
+            if token:
+                yield f"data: {json.dumps({'token': token})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'sources': list(emails.keys())[:40]})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 # ── Status / Health ───────────────────────────────────────────
 
 @app.get("/status")
