@@ -261,6 +261,87 @@ async def health():
 
 
 # ─────────────────────────────────────────────────────────────
+#  QUERY — non-streaming endpoint for programmatic use (OpenClaw, etc.)
+# ─────────────────────────────────────────────────────────────
+
+class QueryMessage(BaseModel):
+    message: str
+    mode: str = "vault"   # "vault" or "agent"
+
+@app.post("/query")
+async def query(msg: QueryMessage):
+    """
+    Synchronous query endpoint — returns plain JSON.
+    Designed for programmatic callers like OpenClaw skills, scripts, and integrations.
+    mode=vault  → answers from your indexed documents only
+    mode=agent  → answers from your vault + live DuckDuckGo web search
+    """
+    try:
+        q_emb = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
+
+        # Vault search with relevance filtering
+        vault_context = ""
+        vault_sources = []
+        RELEVANCE_THRESHOLD = 0.75
+        v = collection.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
+        if v["documents"][0]:
+            relevant_docs = []
+            relevant_meta = []
+            for doc, meta, dist in zip(v["documents"][0], v["metadatas"][0], v["distances"][0]):
+                if dist < RELEVANCE_THRESHOLD:
+                    relevant_docs.append(doc)
+                    relevant_meta.append(meta)
+            if relevant_docs:
+                vault_context = "\n\n".join(relevant_docs)
+                vault_sources = list(set(m["source"] for m in relevant_meta))
+
+        # Web search (agent mode only)
+        web_context = ""
+        web_sources = []
+        if msg.mode == "agent":
+            results = web_search(msg.message, max_results=4)
+            for r in results[:3]:
+                text = smart_scrape(r.get("href", ""), max_chars=1500)
+                if text:
+                    web_context += f"\n\nSource: {r.get('title','')}\nURL: {r.get('href','')}\n{text}"
+                    web_sources.append(r.get("title", r.get("href", "")))
+
+        # Build context
+        sections = []
+        if vault_context:
+            sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
+        if web_context:
+            sections.append(f"FROM THE WEB:\n{web_context}")
+
+        if not sections:
+            return {"answer": "I don't have any relevant information indexed for that question. Try adding documents or URLs in VaultMind first.", "sources": []}
+
+        full_context = "\n\n---\n\n".join(sections)
+
+        response = ollama.chat(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a personal AI assistant. Answer the question using ONLY the sources below.\n"
+                        "NEVER invent information. If the answer isn't in the sources, say so clearly.\n"
+                        "Be concise and direct. Plain prose only — no markdown formatting.\n\n"
+                        f"SOURCES:\n{full_context}"
+                    )
+                },
+                {"role": "user", "content": msg.message}
+            ],
+            options={"temperature": 0}
+        )
+        answer = response["message"]["content"]
+        return {"answer": answer, "sources": vault_sources + web_sources, "mode": msg.mode}
+
+    except Exception as e:
+        return {"error": str(e), "answer": "VaultMind encountered an error. Is Ollama running?"}
+
+
+# ─────────────────────────────────────────────────────────────
 #  AGENT LAYER — web search + vault search combined
 # ─────────────────────────────────────────────────────────────
 

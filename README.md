@@ -134,6 +134,31 @@ Same philosophy as [AIR Blackbox](https://airblackbox.ai): your data stays where
 
 ---
 
+## Use with OpenClaw
+
+VaultMind works as an [OpenClaw](https://github.com/openclaw/clawhub) skill — giving OpenClaw a long-term memory layer over your personal documents.
+
+Once installed, you can ask OpenClaw via WhatsApp, Telegram, or iMessage:
+
+> "What are the payment terms in my freelance contract?"
+> "Summarize my website audit from last month."
+> "What's my current data engineer salary range based on my resume?"
+
+OpenClaw routes the question to VaultMind's local RAG pipeline. The answer comes from your indexed docs. Nothing leaves your machine.
+
+**Install the skill:**
+
+```bash
+# Copy the skill folder into your OpenClaw skills directory
+cp -r openclaw-skill ~/.openclaw/skills/vaultmind
+```
+
+Then ask OpenClaw to activate it: *"activate the vaultmind skill"*
+
+The skill folder is in `openclaw-skill/SKILL.md` in this repo.
+
+---
+
 ## Contributing
 
 Apache 2.0. PRs welcome. Open an issue if something breaks.
