@@ -29,11 +29,21 @@ const VENV_DIR    = path.join(app.getPath('userData'), 'venv');
 const VENV_PYTHON = path.join(VENV_DIR, 'bin', 'python3');
 const VENV_PIP    = path.join(VENV_DIR, 'bin', 'pip3');
 
+// Ollama management — bundled binary lives in user data dir
+const OLLAMA_DIR   = path.join(app.getPath('userData'), 'ollama');
+const OLLAMA_BIN   = process.platform === 'win32'
+                     ? path.join(OLLAMA_DIR, 'ollama.exe')
+                     : path.join(OLLAMA_DIR, 'ollama');
+const OLLAMA_PORT  = 11434;
+const OLLAMA_VER   = '0.6.2';    // pinned version to download
+const REQUIRED_MODELS = ['nomic-embed-text', 'mistral'];
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 let mainWindow    = null;
 let loadingWindow = null;
 let backendProc   = null;
+let ollamaProc    = null;   // only set if WE spawned ollama (not system)
 
 // ── Python detection ─────────────────────────────────────────────────────────
 
@@ -55,6 +65,262 @@ function findPython() {
     } catch (_) { /* try next */ }
   }
   return null;
+}
+
+// ── Ollama management ────────────────────────────────────────────────────────
+
+/**
+ * Check if Ollama is already running (system install or previous session).
+ */
+function isOllamaRunning() {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${OLLAMA_PORT}/api/version`, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.setTimeout(2000);
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+/**
+ * Find an existing Ollama binary on the system.
+ * Checks common install locations, then our bundled copy.
+ */
+function findOllama() {
+  const candidates = process.platform === 'win32'
+    ? ['ollama', OLLAMA_BIN]
+    : [
+        '/usr/local/bin/ollama',
+        '/opt/homebrew/bin/ollama',
+        path.join(process.env.HOME || '', '.ollama', 'ollama'),
+        OLLAMA_BIN,                // our downloaded copy
+        'ollama',                  // PATH fallback
+      ];
+
+  for (const p of candidates) {
+    try {
+      execSync(`"${p}" --version 2>&1`, { stdio: 'ignore', timeout: 5000 });
+      return p;
+    } catch (_) { /* try next */ }
+  }
+  return null;
+}
+
+/**
+ * Download the Ollama CLI binary to our app data directory.
+ * Shows progress in the loading window.
+ */
+function downloadOllama() {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true });
+
+    const platform = process.platform === 'win32' ? 'windows-amd64.exe' : 'darwin';
+    const url = `https://github.com/ollama/ollama/releases/download/v${OLLAMA_VER}/ollama-${platform}`;
+
+    setLoadingStatus('Downloading Ollama AI engine…', 15);
+
+    // Follow redirects (GitHub releases redirect to CDN)
+    const download = (url, redirects = 0) => {
+      if (redirects > 5) return reject(new Error('Too many redirects downloading Ollama'));
+
+      const proto = url.startsWith('https') ? https : http;
+      proto.get(url, { headers: { 'User-Agent': 'VaultMind-App' } }, (res) => {
+        // Handle redirect
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          return download(res.headers.location, redirects + 1);
+        }
+
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        }
+
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+        let downloaded = 0;
+        const tmpPath = OLLAMA_BIN + '.tmp';
+        const file = fs.createWriteStream(tmpPath);
+
+        res.on('data', (chunk) => {
+          downloaded += chunk.length;
+          file.write(chunk);
+          if (totalBytes > 0) {
+            const pct = Math.round((downloaded / totalBytes) * 40) + 15; // 15-55%
+            const mb = (downloaded / 1024 / 1024).toFixed(0);
+            const totalMb = (totalBytes / 1024 / 1024).toFixed(0);
+            setLoadingStatus(`Downloading Ollama… ${mb}/${totalMb} MB`, pct);
+          }
+        });
+
+        res.on('end', () => {
+          file.end(() => {
+            // Rename tmp → final, set executable permission
+            fs.renameSync(tmpPath, OLLAMA_BIN);
+            if (process.platform !== 'win32') {
+              fs.chmodSync(OLLAMA_BIN, 0o755);
+            }
+            resolve(OLLAMA_BIN);
+          });
+        });
+
+        res.on('error', (err) => {
+          file.destroy();
+          try { fs.unlinkSync(tmpPath); } catch (_) {}
+          reject(err);
+        });
+      }).on('error', reject);
+    };
+
+    download(url);
+  });
+}
+
+/**
+ * Start `ollama serve` as a background process.
+ * Returns a promise that resolves when the server is accepting connections.
+ */
+function startOllamaServer(ollamaBin) {
+  return new Promise((resolve, reject) => {
+    setLoadingStatus('Starting Ollama AI engine…', 58);
+
+    ollamaProc = spawn(ollamaBin, ['serve'], {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        OLLAMA_HOST: `127.0.0.1:${OLLAMA_PORT}`,
+      },
+    });
+
+    ollamaProc.stderr.on('data', d => console.log('[ollama]', d.toString().trimEnd()));
+    ollamaProc.on('error', err => console.error('[ollama] spawn error:', err.message));
+
+    // Poll until server is ready
+    let attempts = 0;
+    const maxAttempts = 30;
+    const check = () => {
+      isOllamaRunning().then(running => {
+        if (running) return resolve();
+        attempts++;
+        if (attempts >= maxAttempts) return reject(new Error('Ollama server did not start in time.'));
+        setTimeout(check, 1000);
+      });
+    };
+    setTimeout(check, 1500);
+  });
+}
+
+/**
+ * Pull a model via Ollama API, showing progress in the loading window.
+ */
+function pullModel(modelName, baseProgress, progressRange) {
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({ name: modelName });
+
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: OLLAMA_PORT,
+      path: '/api/pull',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, (res) => {
+      let buf = '';
+      res.on('data', (chunk) => {
+        buf += chunk.toString();
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.status === 'success') {
+              setLoadingStatus(`✓ ${modelName} ready`, baseProgress + progressRange);
+              return; // resolve will fire on 'end'
+            }
+            // Show download progress
+            if (data.total && data.completed) {
+              const modelPct = data.completed / data.total;
+              const pct = baseProgress + Math.round(modelPct * progressRange);
+              const mb = (data.completed / 1024 / 1024).toFixed(0);
+              const totalMb = (data.total / 1024 / 1024).toFixed(0);
+              setLoadingStatus(`Downloading ${modelName}… ${mb}/${totalMb} MB`, pct);
+            } else if (data.status) {
+              setLoadingStatus(`${modelName}: ${data.status}`, baseProgress);
+            }
+          } catch (_) {}
+        }
+      });
+      res.on('end', resolve);
+      res.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+/**
+ * Ensure required models are available — pulls any that are missing.
+ */
+async function ensureModels(ollamaBin) {
+  for (let i = 0; i < REQUIRED_MODELS.length; i++) {
+    const model = REQUIRED_MODELS[i];
+    const baseProgress = 60 + (i * 15);  // 60-75 for first model, 75-90 for second
+
+    // Check if model already exists
+    try {
+      execSync(`"${ollamaBin}" list 2>&1`, { timeout: 10000 })
+        .toString();
+      const listOutput = execSync(`"${ollamaBin}" list 2>&1`, { timeout: 10000 }).toString();
+      if (listOutput.includes(model)) {
+        setLoadingStatus(`✓ ${model} ready`, baseProgress + 15);
+        continue;
+      }
+    } catch (_) { /* can't check — just try pulling */ }
+
+    setLoadingStatus(`Checking ${model}…`, baseProgress);
+    await pullModel(model, baseProgress, 15);
+  }
+}
+
+/**
+ * Master function: ensure Ollama is running + models are available.
+ * 1. Check if Ollama is already running (system install) → use it
+ * 2. Find Ollama binary → start server
+ * 3. No binary found → download it → start server
+ * 4. Pull required models
+ */
+async function ensureOllama() {
+  // Already running? Great, skip everything.
+  if (await isOllamaRunning()) {
+    setLoadingStatus('Ollama detected ✓', 58);
+    const bin = findOllama() || 'ollama';
+    await ensureModels(bin);
+    return;
+  }
+
+  // Find or download binary
+  let ollamaBin = findOllama();
+  if (!ollamaBin) {
+    setLoadingStatus('Ollama not found — downloading…', 12);
+    ollamaBin = await downloadOllama();
+  }
+
+  // Start the server
+  await startOllamaServer(ollamaBin);
+
+  // Pull models
+  await ensureModels(ollamaBin);
+}
+
+/** Kill ollama server if we started it. */
+function killOllama() {
+  if (ollamaProc) {
+    ollamaProc.kill('SIGTERM');
+    ollamaProc = null;
+  }
 }
 
 // ── Backend health check ─────────────────────────────────────────────────────
@@ -331,8 +597,12 @@ async function initialize() {
   showLoadingWindow();
 
   try {
-    // Step 1: Find Python
-    setLoadingStatus('Checking Python…', 10);
+    // Step 1: Ensure Ollama is running + models are pulled
+    setLoadingStatus('Checking AI engine…', 5);
+    await ensureOllama();
+
+    // Step 2: Find Python
+    setLoadingStatus('Checking Python…', 90);
     const python = findPython();
     if (!python) {
       throw new Error(
@@ -342,18 +612,18 @@ async function initialize() {
       );
     }
 
-    // Step 2: Set up venv (skipped on every launch except the first)
+    // Step 3: Set up venv (skipped on every launch except the first)
     await ensureVenv(python);
 
-    // Step 3: Start the backend
-    setLoadingStatus('Starting VaultMind…', 70);
+    // Step 4: Start the backend
+    setLoadingStatus('Starting VaultMind…', 94);
     startBackend();
 
-    // Step 4: Wait for it to be ready
-    setLoadingStatus('Loading AI backend…', 82);
+    // Step 5: Wait for it to be ready
+    setLoadingStatus('Loading AI backend…', 96);
     await waitForBackend();
 
-    // Step 5: Open the app
+    // Step 6: Open the app
     setLoadingStatus('Ready!', 100);
     await createMainWindow();
 
@@ -380,11 +650,15 @@ app.on('activate', () => {
   }
 });
 
-// Kill backend when all windows are closed (non-macOS quits the app too)
+// Kill backend + ollama when all windows are closed (non-macOS quits the app too)
 app.on('window-all-closed', () => {
   killBackend();
+  killOllama();
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Always kill backend before quitting (catches Cmd+Q, dock quit, etc.)
-app.on('before-quit', killBackend);
+// Always kill backend + ollama before quitting (catches Cmd+Q, dock quit, etc.)
+app.on('before-quit', () => {
+  killBackend();
+  killOllama();
+});
