@@ -124,6 +124,22 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
 .card-del:hover{color:var(--red)}
 .section-empty{font-size:11px;color:var(--text5);padding:10px 4px;font-style:italic}
 .section-divider{height:1px;background:var(--border);margin:2px 0}
+/* ── Conversation history ── */
+.conv-section{padding:10px 14px 6px;flex-shrink:0;border-bottom:1px solid var(--border)}
+.conv-header{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.conv-label{font-size:10px;font-weight:600;color:var(--text5);text-transform:uppercase;letter-spacing:.1em;flex:1}
+.new-chat-btn{background:var(--accent);border:none;border-radius:7px;padding:5px 10px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;transition:background .15s;flex-shrink:0}
+.new-chat-btn:hover{background:var(--accent2)}
+.conv-list{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto}
+.conv-list::-webkit-scrollbar{width:3px}.conv-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.conv-item{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg3);border:1px solid transparent;border-radius:8px;cursor:pointer;transition:all .15s;min-width:0}
+.conv-item:hover{border-color:var(--border2);background:var(--bg4)}
+.conv-item.active{border-color:var(--accent);background:rgba(99,102,241,.08)}
+.conv-item-title{font-size:12px;color:var(--text2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv-item-del{background:none;border:none;color:transparent;cursor:pointer;font-size:13px;padding:0 2px;flex-shrink:0;transition:color .15s;line-height:1}
+.conv-item:hover .conv-item-del{color:var(--text5)}.conv-item-del:hover{color:var(--red) !important}
+.conv-empty{font-size:11px;color:var(--text5);font-style:italic;padding:4px 2px}
+
 .sidebar-footer{border-top:1px solid var(--border);padding:12px 14px;flex-shrink:0}
 .setting-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .setting-row:last-child{margin-bottom:0}
@@ -350,6 +366,10 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
     <div class="upload-zone" id="zone"><div class="ico">📁</div><p><strong>Drop files here</strong><br>PDF, Word, TXT, CSV, images…</p></div>
     <input type="file" id="file-input" multiple accept=".pdf,.docx,.txt,.md,.csv,.xml,.zip,.jpg,.jpeg,.png,.gif,.bmp,.webp,.heic,.tiff,.tif">
     <div class="url-zone"><input type="text" id="url-input" placeholder="Paste a URL to index…"><button id="url-btn">Fetch</button></div>
+    <div class="conv-section">
+      <div class="conv-header"><span class="conv-label">Conversations</span><button class="new-chat-btn" onclick="newConversation()">+ New</button></div>
+      <div class="conv-list" id="conv-list"><div class="conv-empty" id="conv-empty">No conversations yet</div></div>
+    </div>
     <div class="source-panels" id="source-panels">
       <!-- Documents -->
       <div><div class="section-header"><span class="section-label">Documents</span><span class="section-count" id="docs-count">0</span></div><div id="docs-list"><div class="section-empty" id="docs-empty">No documents indexed yet</div></div></div>
@@ -768,7 +788,7 @@ async function checkSetup() {
 }
 function launchApp() {
   document.getElementById('setup-screen').style.display='none';
-  ping(); loadFiles();
+  ping(); loadFiles(); loadConversations();
   fetch(`${API}/auth/gmail/status`).then(r=>r.json()).then(s=>updateQuickActions(s.connected===true)).catch(()=>{});
 }
 checkSetup();
@@ -1058,6 +1078,7 @@ async function ask() {
             if(data.sources?.length){const s=document.createElement('div');s.className='src';s.textContent='Sources: '+[...new Set(data.sources.map(sourceLabel))].join(', ');botEl.appendChild(s);}
             history.push({role:'user',content:text});history.push({role:'assistant',content:fullText});
             if(history.length>12) history=history.slice(-12);
+            autoSave();
           }
         }catch{}
       }
@@ -1091,6 +1112,102 @@ async function openPrivacy() {
 }
 function closePrivacy(){document.getElementById('privacy-modal').classList.add('hidden');}
 document.getElementById('privacy-modal').addEventListener('click',e=>{if(e.target===document.getElementById('privacy-modal'))closePrivacy();});
+
+// ── Conversations ──────────────────────────────────────────────
+let currentConvId = null;
+
+function genId() { return 'conv-' + Date.now() + '-' + Math.random().toString(36).slice(2,8); }
+
+function newConversation() {
+  currentConvId = genId();
+  history = [];
+  msgsEl.innerHTML = `<div id="empty" class="empty"><div class="empty-icon">🧠</div><div class="empty-title">New conversation</div><div class="empty-sub">Ask anything about your documents</div></div>`;
+  document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
+}
+
+async function loadConversations() {
+  try {
+    const d = await fetch(`${API}/conversations`).then(r => r.json());
+    const list = document.getElementById('conv-list');
+    const empty = document.getElementById('conv-empty');
+    if (!d.conversations || d.conversations.length === 0) {
+      list.innerHTML = '';
+      if (empty) { list.appendChild(empty); empty.style.display = ''; }
+      return;
+    }
+    list.innerHTML = '';
+    d.conversations.forEach(c => {
+      const item = document.createElement('div');
+      item.className = 'conv-item' + (c.id === currentConvId ? ' active' : '');
+      item.dataset.id = c.id;
+      item.innerHTML = `<span class="conv-item-title">${c.title || 'Untitled'}</span><span style="font-size:10px;color:var(--text5);flex-shrink:0">${c.count || 0} msgs</span><button class="conv-item-del" onclick="event.stopPropagation();deleteConversation('${c.id}')">×</button>`;
+      item.onclick = () => loadConversation(c.id);
+      list.appendChild(item);
+    });
+  } catch(e) { console.error('loadConversations:', e); }
+}
+
+async function loadConversation(id) {
+  try {
+    const d = await fetch(`${API}/conversations/${id}`).then(r => r.json());
+    if (d.error) { toast('❌ Could not load conversation', true); return; }
+    currentConvId = id;
+    history = [];
+    msgsEl.innerHTML = '';
+
+    // Restore model/skill if saved
+    if (d.model && modelSelect) { modelSelect.value = d.model; currentModel = d.model; }
+    if (d.skill && skillSelect) { skillSelect.value = d.skill; currentSkill = d.skill; updateSkillBadge(); }
+
+    // Replay messages into the chat
+    const msgs = d.messages || [];
+    for (const m of msgs) {
+      if (m.role === 'user') {
+        addUserMsg(m.content);
+        history.push({ role: 'user', content: m.content });
+      } else if (m.role === 'assistant') {
+        const botEl = document.createElement('div'); botEl.className = 'msg-bot';
+        const bubble = document.createElement('div'); bubble.className = 'bubble';
+        bubble.innerHTML = (typeof marked !== 'undefined' ? marked.parse(m.content) : m.content);
+        botEl.appendChild(bubble); msgsEl.appendChild(botEl);
+        history.push({ role: 'assistant', content: m.content });
+      }
+    }
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+
+    // Highlight in sidebar
+    document.querySelectorAll('.conv-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
+  } catch(e) { toast('❌ Load failed', true); console.error(e); }
+}
+
+async function deleteConversation(id) {
+  if (!confirm('Delete this conversation?')) return;
+  try {
+    await fetch(`${API}/conversations/${id}`, { method: 'DELETE' });
+    if (currentConvId === id) newConversation();
+    loadConversations();
+    toast('🗑️ Conversation deleted');
+  } catch(e) { toast('❌ Delete failed', true); }
+}
+
+// Initialize a conversation ID for the first chat
+currentConvId = genId();
+
+async function autoSave() {
+  if (!currentConvId) currentConvId = genId();
+  if (history.length === 0) return;
+  // Auto-title from first user message
+  const firstUser = history.find(m => m.role === 'user');
+  const title = firstUser ? firstUser.content.slice(0, 60) : 'Untitled';
+  try {
+    await fetch(`${API}/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentConvId, title, messages: history, model: currentModel, skill: currentSkill })
+    });
+    loadConversations();
+  } catch(e) { console.error('autoSave:', e); }
+}
 
 // ── Watch Folders ──────────────────────────────────────────────
 async function addWatchFolder() {

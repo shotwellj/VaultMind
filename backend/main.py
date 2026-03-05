@@ -71,6 +71,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 CONFIG_FILE      = os.path.join(DATA_DIR, "connector_config.json")
 FEED_FILE        = os.path.join(DATA_DIR, "feed_events.json")
+CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
+os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 
 # ── Gmail paths ───────────────────────────────────────────────
 GMAIL_SCOPES     = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -1131,6 +1133,73 @@ class ChatMessage(BaseModel):
 
 EMAIL_KEYWORDS = {"email", "emails", "inbox", "gmail", "mail", "summarize my day",
                   "what did i get", "any messages", "any emails", "check my email"}
+
+
+# ── Conversation persistence ──────────────────────────────────
+
+class ConversationSave(BaseModel):
+    id:       str
+    title:    str = ""
+    messages: list[dict] = []
+    model:    str = "mistral"
+    skill:    str = ""
+
+@app.get("/conversations")
+async def list_conversations():
+    """Return all saved conversations sorted by last modified (newest first)."""
+    convos = []
+    for fname in os.listdir(CONVERSATIONS_DIR):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(CONVERSATIONS_DIR, fname)
+        try:
+            with open(fpath, "r") as f:
+                data = json.load(f)
+            convos.append({
+                "id":        data.get("id", fname.replace(".json", "")),
+                "title":     data.get("title", "Untitled"),
+                "model":     data.get("model", "mistral"),
+                "skill":     data.get("skill", ""),
+                "count":     len(data.get("messages", [])),
+                "updated_at": os.path.getmtime(fpath),
+            })
+        except Exception:
+            continue
+    convos.sort(key=lambda c: c["updated_at"], reverse=True)
+    return {"conversations": convos}
+
+@app.get("/conversations/{conv_id}")
+async def get_conversation(conv_id: str):
+    """Load a single conversation by ID."""
+    fpath = os.path.join(CONVERSATIONS_DIR, f"{conv_id}.json")
+    if not os.path.exists(fpath):
+        return {"error": "Conversation not found"}
+    with open(fpath, "r") as f:
+        return json.load(f)
+
+@app.post("/conversations")
+async def save_conversation(conv: ConversationSave):
+    """Save or update a conversation."""
+    fpath = os.path.join(CONVERSATIONS_DIR, f"{conv.id}.json")
+    data = {
+        "id":       conv.id,
+        "title":    conv.title,
+        "messages": conv.messages,
+        "model":    conv.model,
+        "skill":    conv.skill,
+    }
+    with open(fpath, "w") as f:
+        json.dump(data, f, indent=2)
+    return {"ok": True}
+
+@app.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str):
+    """Delete a conversation."""
+    fpath = os.path.join(CONVERSATIONS_DIR, f"{conv_id}.json")
+    if os.path.exists(fpath):
+        os.remove(fpath)
+    return {"ok": True}
+
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
