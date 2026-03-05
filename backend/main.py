@@ -21,6 +21,7 @@ from docx import Document
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 # Optional Pillow for EXIF
 try:
@@ -1279,25 +1280,37 @@ async def chat(msg: ChatMessage):
         if use_web:
             mode = "hybrid" if use_vault else "web"
             yield f"data: {json.dumps({'status': '🔍 Searching the web…'})}\n\n"
-            search_hits = web_search(msg.message, 8)
+            search_hits = multi_search(msg.message, 12)
 
             if search_hits:
                 web_context = ""
                 scraped = 0
+                seen_domains = set()
                 for hit in search_hits:
-                    if scraped >= 4:
+                    if scraped >= 6:
                         break
                     url   = hit.get("href", "")
                     title = hit.get("title", url)
                     body  = hit.get("body", "")
+                    if not url or _is_blocked_url(url):
+                        continue
+                    # Deduplicate by domain — don't scrape 5 pages from same site
+                    try:
+                        from urllib.parse import urlparse
+                        domain = urlparse(url).netloc
+                    except Exception:
+                        domain = url
+                    if domain in seen_domains and scraped >= 3:
+                        continue
+                    seen_domains.add(domain)
                     yield f"data: {json.dumps({'status': f'📄 Reading: {title[:50]}…'})}\n\n"
                     page_text = smart_scrape(url) or body
                     if page_text:
-                        web_context += f"\n\nSource: {title}\nURL: {url}\n{page_text}"
+                        web_context += f"\n\n[Source #{scraped+1}]: {title}\nURL: {url}\n{page_text}"
                         all_sources.append(f"[{title}]({url})")
                         scraped += 1
                     elif body:
-                        web_context += f"\n\nSource: {title}\nURL: {url}\n{body}"
+                        web_context += f"\n\n[Source #{scraped+1}]: {title}\nURL: {url}\n{body}"
                         all_sources.append(f"[{title}]({url})")
                         scraped += 1
 
@@ -1320,24 +1333,28 @@ async def chat(msg: ChatMessage):
         if mode == "web":
             system_prompt = (
                 "You are a personal AI assistant with access to REAL web search results.\n\n"
-                "STRICT RULES:\n"
-                "1. ONLY use information from the search results provided below.\n"
-                "2. NEVER fabricate URLs — only include URLs that appear in the sources.\n"
-                "3. NEVER make up company names, job titles, or facts not in the sources.\n"
-                "4. If the search results don't contain what the user wants, say so.\n"
-                "5. Always cite your sources with the real URL.\n"
-                "6. Use markdown formatting where helpful.\n\n"
+                "STRICT RULES — FOLLOW EXACTLY:\n"
+                "1. ONLY use information from the numbered search results below.\n"
+                "2. NEVER fabricate or guess URLs — only include URLs that literally appear in the sources.\n"
+                "3. NEVER make up company names, job titles, salaries, or any facts not in the sources.\n"
+                "4. Each item in a list MUST link to a DIFFERENT, UNIQUE URL. Never repeat the same URL for multiple items.\n"
+                "5. If a source is a search results page (like a Glassdoor or Indeed search), say so — do NOT pretend each company on that page has that URL.\n"
+                "6. If you can only find 5 real results with unique URLs, list 5 — do NOT pad the list with invented entries.\n"
+                "7. Format each result with its own specific URL from the sources.\n"
+                "8. If the search results don't answer the question, say 'I found limited results' and share what you have.\n"
+                "9. Use markdown formatting.\n\n"
                 f"SEARCH RESULTS:\n{'---'.join(sections)}"
                 f"{skill_block}"
             )
         elif mode == "hybrid":
             system_prompt = (
                 "You are a personal AI assistant. You have access to the user's private documents AND real web search results.\n\n"
-                "STRICT RULES:\n"
+                "STRICT RULES — FOLLOW EXACTLY:\n"
                 "1. ONLY use information from the sources below — never invent anything.\n"
-                "2. NEVER fabricate URLs — only include URLs from the web results.\n"
-                "3. Clearly distinguish between info from private docs vs web results.\n"
-                "4. Be concise and direct. Use markdown.\n\n"
+                "2. NEVER fabricate URLs — only include URLs that literally appear in the web results.\n"
+                "3. Each item MUST have a UNIQUE URL. Never repeat the same link for different items.\n"
+                "4. Clearly distinguish between info from private docs vs web results.\n"
+                "5. Be concise and direct. Use markdown.\n\n"
                 f"SOURCES:\n{'---'.join(sections)}"
                 f"{skill_block}"
             )
@@ -1531,24 +1548,91 @@ BROWSER_HEADERS = {
     "DNT": "1",
 }
 
-def web_search(query: str, max_results: int = 6) -> list[dict]:
+# Domains to never scrape — security risks, paywalls, bot detection
+SCRAPE_BLOCKLIST = {
+    "linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
+    "facebook.com", "instagram.com", "twitter.com", "x.com",
+    "tiktok.com", "pinterest.com", "reddit.com",
+    "bit.ly", "t.co", "goo.gl", "tinyurl.com",   # URL shorteners
+    "malware", "virus", "phishing",                 # safety keywords
+}
+
+# Trusted job board domains for direct job link searches
+JOB_BOARD_DOMAINS = [
+    "greenhouse.io", "lever.co", "ashbyhq.com", "jobs.lever.co",
+    "boards.greenhouse.io", "careers.google.com", "amazon.jobs",
+    "builtin.com", "builtinla.com", "wellfound.com", "ycombinator.com",
+]
+
+# Detect if query is about jobs/hiring
+_JOB_INTENT_RE = _re.compile(
+    r"\b(hiring|jobs?|openings?|positions?|roles?|careers?|recrui|software engineer|data engineer|data scientist)\b",
+    _re.IGNORECASE,
+)
+
+def _is_blocked_url(url: str) -> bool:
+    """Check if a URL matches the blocklist."""
+    url_lower = url.lower()
+    return any(d in url_lower for d in SCRAPE_BLOCKLIST)
+
+def web_search(query: str, max_results: int = 8) -> list[dict]:
+    """Single DuckDuckGo search."""
     try:
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
         print(f"Search error: {e}"); return []
 
-def smart_scrape(url: str, max_chars: int = 2000) -> str:
-    BLOCKED = ["linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com"]
-    if any(d in url for d in BLOCKED): return ""
+def multi_search(query: str, max_total: int = 12) -> list[dict]:
+    """Run multiple targeted searches for richer results.
+    For job queries, adds targeted job board searches.
+    Deduplicates by URL."""
+    seen_urls = set()
+    all_hits  = []
+
+    def _add_hits(hits):
+        for h in hits:
+            url = h.get("href", "")
+            if url and url not in seen_urls and not _is_blocked_url(url):
+                seen_urls.add(url)
+                all_hits.append(h)
+
+    # Primary search
+    _add_hits(web_search(query, 8))
+
+    # If job-related, add targeted searches for real job boards
+    if _JOB_INTENT_RE.search(query) and len(all_hits) < max_total:
+        # Extract location and role keywords for targeted queries
+        _add_hits(web_search(f"{query} site:greenhouse.io OR site:lever.co", 6))
+        if len(all_hits) < max_total:
+            _add_hits(web_search(f"{query} site:builtin.com OR site:wellfound.com", 4))
+
+    return all_hits[:max_total]
+
+def smart_scrape(url: str, max_chars: int = 3000) -> str:
+    """Safely scrape a page with blocklist, size limit, and timeout."""
+    if _is_blocked_url(url):
+        return ""
     try:
-        r = requests.get(url, timeout=8, headers=BROWSER_HEADERS)
-        if r.status_code != 200: return ""
-        soup = BeautifulSoup(r.content, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
+        r = requests.get(url, timeout=8, headers=BROWSER_HEADERS, stream=True)
+        if r.status_code != 200:
+            return ""
+        # Check content type — only scrape HTML
+        ctype = r.headers.get("Content-Type", "")
+        if "html" not in ctype and "text" not in ctype:
+            return ""
+        # Limit download size to 500KB to avoid huge pages
+        content = b""
+        for chunk in r.iter_content(chunk_size=8192):
+            content += chunk
+            if len(content) > 500_000:
+                break
+        soup = BeautifulSoup(content, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
             tag.decompose()
         return soup.get_text(separator="\n", strip=True)[:max_chars]
-    except Exception: return ""
+    except Exception:
+        return ""
 
 @app.post("/agent")
 async def agent(msg: ChatMessage):
