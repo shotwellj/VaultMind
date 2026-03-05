@@ -1092,12 +1092,41 @@ async def delete_connector(connector: str):
 
 # ── Chat ──────────────────────────────────────────────────────
 
+SKILL_PROMPTS = {
+    "nostalgic": (
+        "RESPONSE STYLE — Nostalgic Skin Co. Brand Voice:\n"
+        "You write copy for a men's natural bar soap brand. Voice: rugged, witty, anti-corporate, nostalgic, honest.\n"
+        "Target: blue-collar workers and tech dads, ages 25-45.\n"
+        "Sound like a buddy recommending something — NOT a brand selling something.\n"
+        "Use concrete physical language: hands, grit, sweat, work, garage, campfire.\n"
+        "Lead with humor or an unexpected hook, not product features.\n"
+        "NEVER use: premium, artisanal, curated, elevated, bespoke, pampering, luxury.\n"
+        "CTAs: 'Grab a bar' — NOT 'Shop Now' or 'Add to Cart'.\n"
+        "Describe scents through memory/scenario, not ingredient lists.\n"
+        "No markdown. Plain prose only."
+    ),
+    "recruiting": (
+        "RESPONSE STYLE — Recruiting Expert:\n"
+        "You are a specialized headhunter focused on Data Science, Data Engineering, Analytics, and Machine Learning roles.\n"
+        "Help craft outreach emails, evaluate candidates, analyze job descriptions, and provide recruiting strategy.\n"
+        "Be direct, actionable, and focused on revenue outcomes. No fluff."
+    ),
+    "airblackbox": (
+        "RESPONSE STYLE — AIR Blackbox Developer:\n"
+        "You are an expert developer on AIR Blackbox, an open-source EU AI Act compliance scanner for Python AI agents.\n"
+        "You know: Article 9 (risk management), 10 (data governance), 11 (technical documentation), "
+        "12 (logging/audit), 14 (human oversight), 15 (accuracy/robustness).\n"
+        "Help with code, documentation, compliance analysis, and developer content. Be precise and technical."
+    ),
+}
+
 class ChatMessage(BaseModel):
     message:       str
     history:       list[dict] = []
     workspace:     str = "Default"
     model:         str = "mistral"
     pinned_source: str = ""   # when set, restrict retrieval to this exact source
+    skill:         str = ""   # optional skill context injected into system prompt
 
 EMAIL_KEYWORDS = {"email", "emails", "inbox", "gmail", "mail", "summarize my day",
                   "what did i get", "any messages", "any emails", "check my email"}
@@ -1130,6 +1159,10 @@ async def chat(msg: ChatMessage):
     context = "\n\n---\n\n".join(results["documents"][0])
     sources  = list(set(m["source"] for m in results["metadatas"][0]))
 
+    skill_block = ""
+    if msg.skill and msg.skill in SKILL_PROMPTS:
+        skill_block = f"\n\n{SKILL_PROMPTS[msg.skill]}"
+
     messages = [
         {
             "role": "system",
@@ -1142,6 +1175,7 @@ async def chat(msg: ChatMessage):
                 "4. Be concise and direct.\n"
                 "5. Write in plain prose only. NO markdown — no bold, no headers, no bullet dashes.\n\n"
                 f"INDEXED DOCUMENTS:\n{context}"
+                f"{skill_block}"
             )
         }
     ]

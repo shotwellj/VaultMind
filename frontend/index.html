@@ -318,6 +318,15 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
           <option value="deepseek-r1">DeepSeek R1</option>
         </select>
       </div>
+      <div class="setting-row">
+        <span class="setting-label">Skill</span>
+        <select id="skill-select" class="model-select">
+          <option value="">None</option>
+          <option value="nostalgic">🧼 Nostalgic Brand Voice</option>
+          <option value="recruiting">🎯 Recruiting Pro</option>
+          <option value="airblackbox">🔒 AIR Blackbox Dev</option>
+        </select>
+      </div>
     </div>
   </div>
 
@@ -333,6 +342,7 @@ header{padding:14px 24px;border-bottom:1px solid #1e1e1e;display:flex;align-item
     <div id="quick-actions" style="display:none;padding:6px 20px 0;gap:6px;flex-wrap:wrap;flex-shrink:0"></div>
     <div class="bar">
       <button class="mode-btn" id="mode-btn">🔒 Vault</button>
+      <span id="skill-badge" style="display:none;align-items:center;gap:4px;background:#1e1b4b;color:#a5b4fc;font-size:11px;padding:3px 8px;border-radius:12px;white-space:nowrap;flex-shrink:0"></span>
       <input id="q" type="text" placeholder="Ask anything about your documents…" disabled>
       <button id="send" disabled>Send</button>
     </div>
@@ -489,6 +499,7 @@ const API = 'http://localhost:8000';
 
 // ── State ─────────────────────────────────────────────────────
 let currentModel   = 'mistral';
+let currentSkill   = '';
 let history        = [];
 let busy           = false;
 let agentMode      = false;
@@ -511,6 +522,7 @@ const zoneEl         = document.getElementById('zone');
 const fileInp        = document.getElementById('file-input');
 const hstatus        = document.getElementById('hstatus');
 const modelSelect    = document.getElementById('model-select');
+const skillSelect    = document.getElementById('skill-select');
 const modeBtn        = document.getElementById('mode-btn');
 
 // ── Sidebar toggle ────────────────────────────────────────────
@@ -630,6 +642,17 @@ function clearFilesList() {
 
 // ── Model ─────────────────────────────────────────────────────
 modelSelect.onchange = () => { currentModel = modelSelect.value; };
+skillSelect.onchange  = () => { currentSkill  = skillSelect.value; updateSkillBadge(); };
+
+function updateSkillBadge() {
+  const badge = document.getElementById('skill-badge');
+  if (currentSkill && skillSelect.options[skillSelect.selectedIndex]) {
+    badge.textContent = skillSelect.options[skillSelect.selectedIndex].text;
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
 
 // ── Mode toggle ───────────────────────────────────────────────
 modeBtn.onclick = () => {
@@ -1039,7 +1062,7 @@ async function ask() {
 
   let fullText = '';
   try {
-    const chatBody = { message: text, history, model: currentModel };
+    const chatBody = { message: text, history, model: currentModel, skill: currentSkill };
     const res = await fetch(agentMode ? `${API}/agent` : `${API}/chat`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(chatBody)
