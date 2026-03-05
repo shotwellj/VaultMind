@@ -1,6 +1,6 @@
 {
   "name": "vaultmind",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Your personal AI. Local. Private. Yours.",
   "main": "main.js",
   "scripts": {

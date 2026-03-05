@@ -1132,6 +1132,7 @@ class ChatMessage(BaseModel):
     pinned_source: str = ""   # when set, restrict retrieval to this exact source
     skill:         str = ""   # optional skill context injected into system prompt
     custom_prompt: str = ""   # free-form system prompt from the prompts marketplace
+    mode:          str = ""   # "agent" when called from agent toggle
 
 EMAIL_KEYWORDS = {"email", "emails", "inbox", "gmail", "mail", "summarize my day",
                   "what did i get", "any messages", "any emails", "check my email"}
@@ -1529,10 +1530,15 @@ async def chat(msg: ChatMessage):
     # Route: VAULT ONLY   — vault has relevant docs & not a web intent & no URLs
     # Route: WEB SEARCH   — vault empty/irrelevant OR explicit web intent OR URL pasted
     # Route: HYBRID       — vault has some data + web intent (but no URL pasted)
+    is_agent_mode = (msg.mode == "agent")
     if has_user_urls:
         # URL pasted → pure web mode, ignore vault completely
         use_web   = True
         use_vault = False
+    elif is_agent_mode:
+        # Agent toggle ON → always enable web, vault only if relevant
+        use_web   = True
+        use_vault = vault_has_answer
     else:
         use_web   = wants_web or not vault_has_answer
         use_vault = vault_has_answer
@@ -2067,71 +2073,10 @@ def smart_scrape(url: str, max_chars: int = 3000) -> str:
 
 @app.post("/agent")
 async def agent(msg: ChatMessage):
-    col        = get_collection()
-    chat_model = msg.model or DEFAULT_MODEL
-
-    def generate():
-        vault_context = ""
-        vault_sources = []
-        RELEVANCE_THRESHOLD = 0.75
-        try:
-            q_emb = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
-            v     = col.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
-            if v["documents"][0]:
-                rel_docs, rel_meta = [], []
-                for doc, meta, dist in zip(v["documents"][0], v["metadatas"][0], v["distances"][0]):
-                    if dist < RELEVANCE_THRESHOLD:
-                        rel_docs.append(doc); rel_meta.append(meta)
-                if rel_docs:
-                    vault_context = "\n\n".join(rel_docs)
-                    vault_sources = list(set(m["source"] for m in rel_meta))
-        except Exception: pass
-
-        yield f"data: {json.dumps({'status': '🔍 Searching the web...'})}\n\n"
-        search_hits = web_search(msg.message, 6)
-        if not search_hits:
-            yield f"data: {json.dumps({'status': '⚠️ No web results, using vault only.'})}\n\n"
-
-        web_context = ""
-        web_sources = []
-        scraped     = 0
-        for hit in search_hits:
-            if scraped >= 3: break
-            url   = hit.get("href", "")
-            title = hit.get("title", url)
-            yield f"data: {json.dumps({'status': f'📄 Reading: {title[:50]}...'})}\n\n"
-            page_text = smart_scrape(url) or hit.get("body", "")
-            if page_text:
-                web_context += f"\n\nSource: {title}\nURL: {url}\n{page_text}"
-                web_sources.append(f"[{title}]({url})")
-                scraped += 1
-
-        yield f"data: {json.dumps({'status': '💬 Generating answer...'})}\n\n"
-
-        sections = []
-        if vault_context: sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{vault_context}")
-        if web_context:   sections.append(f"FROM THE WEB:\n{web_context}")
-
-        if not sections:
-            yield f"data: {json.dumps({'token': 'No relevant information found.'})}\n\n"
-            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
-            return
-
-        messages = [
-            {"role": "system", "content": (
-                "You are a personal AI agent. Synthesize information from both private docs and web results.\n"
-                "NEVER hallucinate. Be direct. Plain prose only — no markdown.\n\n"
-                f"SOURCES:\n\n{'---'.join(sections)}"
-            )}
-        ]
-        for h in msg.history[-6:]: messages.append(h)
-        messages.append({"role": "user", "content": msg.message})
-
-        stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
-        for chunk in stream:
-            token = chunk["message"]["content"]
-            if token: yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'done': True, 'sources': vault_sources + web_sources})}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    """Agent mode now uses the exact same pipeline as /chat.
+    The /chat endpoint already handles URL detection, staffing agency
+    deep-scrape, company intelligence, web search, and vault lookup.
+    Keeping a separate dumb endpoint was the root cause of agent mode
+    returning generic web search results instead of real analysis."""
+    msg.mode = "agent"  # Tag it so /chat knows this came from agent toggle
+    return await chat(msg)
