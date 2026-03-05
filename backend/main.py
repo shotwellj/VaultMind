@@ -1344,6 +1344,92 @@ def _extract_companies_from_text(text: str) -> list[str]:
 
     return list(companies)[:20]
 
+# ── Staffing Agency Intelligence ────────────────────────────────
+STAFFING_AGENCY_DOMAINS = {
+    "motionrecruitment.com", "cybercoders.com", "jobot.com",
+    "roberthalf.com", "randstad.com", "hays.com", "adecco.com",
+    "insightglobal.com", "teksystems.com", "kforce.com",
+    "aerotek.com", "actalentservices.com", "dice.com",
+    "appleone.com", "spherion.com", "massgenie.com",
+    "rht.com", "nesco.com", "collabera.com",
+}
+
+def _is_staffing_agency_url(url: str) -> bool:
+    """Detect if a URL belongs to a known staffing/recruiting agency."""
+    try:
+        domain = urlparse(url).netloc.lower().replace("www.", "")
+        return any(agency in domain for agency in STAFFING_AGENCY_DOMAINS)
+    except Exception:
+        return False
+
+def _scrape_agency_listing_page(url: str) -> list[dict]:
+    """Scrape a staffing agency job board page and extract individual job URLs.
+    Returns list of {url, title, location, job_type, pay}."""
+    try:
+        r = requests.get(url, timeout=12, headers=BROWSER_HEADERS, stream=True)
+        if r.status_code != 200:
+            return []
+        raw = b""
+        for chunk in r.iter_content(chunk_size=8192):
+            raw += chunk
+            if len(raw) > 800_000:
+                break
+        soup = BeautifulSoup(raw, "html.parser")
+        base = urlparse(url).scheme + "://" + urlparse(url).netloc
+        listings = []
+        seen = set()
+
+        # Find all internal links that look like individual job pages
+        # Pattern: path with job ID (number) at the end
+        job_url_re = _re.compile(r'/\d{4,}$')  # Ends with 4+ digit ID
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"].strip()
+            if not href or href == "#":
+                continue
+            # Make absolute
+            if href.startswith("/"):
+                href = base + href
+            elif not href.startswith("http"):
+                continue
+            # Must be same domain and have a job ID pattern
+            if urlparse(href).netloc != urlparse(url).netloc:
+                continue
+            if not job_url_re.search(href) and "/job/" not in href:
+                continue
+            if href in seen:
+                continue
+            seen.add(href)
+            title = a_tag.get_text(strip=True)[:200]
+            if not title or len(title) < 5:
+                continue
+            listings.append({"url": href, "title": title, "description": ""})
+
+        return listings[:25]  # Cap at 25
+    except Exception as e:
+        print(f"Agency listing scrape error: {e}")
+        return []
+
+def _deep_scrape_job_pages(job_urls: list[dict], max_pages: int = 12) -> list[dict]:
+    """Scrape individual job detail pages and extract full descriptions.
+    Returns enriched list with description field populated."""
+    results = []
+    for entry in job_urls[:max_pages]:
+        url = entry["url"]
+        try:
+            r = requests.get(url, timeout=8, headers=BROWSER_HEADERS)
+            if r.status_code != 200:
+                results.append(entry)
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
+                tag.decompose()
+            text = soup.get_text(separator="\n", strip=True)[:3000]
+            entry["description"] = text
+            results.append(entry)
+        except Exception:
+            results.append(entry)
+    return results
+
 RELEVANCE_THRESHOLD = 0.75   # ChromaDB distance; lower = more similar
 
 @app.post("/chat")
@@ -1409,6 +1495,8 @@ async def chat(msg: ChatMessage):
             seen_urls = set()
 
             # ── Phase A: Scrape any URLs the user explicitly provided ──
+            is_agency_mode = False
+            agency_job_details = []
             if user_urls:
                 yield f"data: {json.dumps({'status': '🔗 Fetching the URL you provided…'})}\n\n"
                 for u_url in user_urls[:3]:  # Max 3 user URLs
@@ -1417,6 +1505,36 @@ async def chat(msg: ChatMessage):
                     seen_urls.add(u_url)
                     domain = urlparse(u_url).netloc
                     seen_domains.add(domain)
+
+                    # ── Staffing Agency Deep-Scrape Mode ──
+                    if _is_staffing_agency_url(u_url):
+                        is_agency_mode = True
+                        yield f"data: {json.dumps({'status': f'🏢 Detected staffing agency: {domain}…'})}\n\n"
+                        yield f"data: {json.dumps({'status': '📋 Extracting job listings…'})}\n\n"
+                        agency_listings = _scrape_agency_listing_page(u_url)
+                        if agency_listings:
+                            yield f"data: {json.dumps({'status': f'Found {len(agency_listings)} job listings. Deep-scraping details…'})}\n\n"
+                            # Deep-scrape individual job pages for full descriptions
+                            enriched = []
+                            for i, listing in enumerate(agency_listings[:15]):
+                                yield f"data: {json.dumps({'status': f'📄 Reading job {i+1}/{min(len(agency_listings),15)}: {listing[\"title\"][:40]}…'})}\n\n"
+                                try:
+                                    jr = requests.get(listing["url"], timeout=8, headers=BROWSER_HEADERS)
+                                    if jr.status_code == 200:
+                                        jsoup = BeautifulSoup(jr.text, "html.parser")
+                                        for tag in jsoup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
+                                            tag.decompose()
+                                        listing["description"] = jsoup.get_text(separator="\n", strip=True)[:2500]
+                                except Exception:
+                                    pass
+                                enriched.append(listing)
+                                all_sources.append(f"[{listing['title'][:60]}]({listing['url']})")
+                            agency_job_details = enriched
+                        else:
+                            yield f"data: {json.dumps({'status': '⚠️ Could not extract listings from agency page.'})}\n\n"
+                        continue  # Skip normal scraping for agency URLs
+
+                    # ── Normal URL scraping ──
                     yield f"data: {json.dumps({'status': f'📄 Reading: {domain}…'})}\n\n"
                     try:
                         r = requests.get(u_url, timeout=12, headers=BROWSER_HEADERS, stream=True)
@@ -1511,7 +1629,20 @@ async def chat(msg: ChatMessage):
                             scraped += 1
 
             # ── Phase C: Build structured data block for the model ──
-            if structured_listings:
+
+            # Agency mode: build detailed job descriptions for client ID
+            if is_agency_mode and agency_job_details:
+                mode = "agency"  # Special mode for agency client identification
+                agency_text = "STAFFING AGENCY JOB LISTINGS (full descriptions scraped from individual pages):\n"
+                for i, entry in enumerate(agency_job_details, 1):
+                    agency_text += f"\n{'='*60}\nJOB #{i}\n"
+                    agency_text += f"Title: {entry['title']}\n"
+                    agency_text += f"URL: {entry['url']}\n"
+                    if entry.get('description'):
+                        agency_text += f"Full Description:\n{entry['description']}\n"
+                sections.append(agency_text)
+
+            elif structured_listings:
                 # Deduplicate listings by URL
                 unique_listings = []
                 listing_urls = set()
@@ -1520,7 +1651,6 @@ async def chat(msg: ChatMessage):
                     url_key = entry["url"]
                     company_key = entry.get("company", "").lower().strip()
                     if url_key not in listing_urls:
-                        # Also skip duplicate companies (different URLs same company)
                         if company_key and company_key in listing_companies:
                             continue
                         listing_urls.add(url_key)
@@ -1541,7 +1671,7 @@ async def chat(msg: ChatMessage):
             if web_context:
                 sections.append(f"FROM THE WEB (real search results):\n{web_context}")
 
-            if not web_context and not structured_listings:
+            if not web_context and not structured_listings and not agency_job_details:
                 yield f"data: {json.dumps({'status': '⚠️ No web results found.'})}\n\n"
 
         # ── No data at all ──────────────────────────────────────
@@ -1553,7 +1683,34 @@ async def chat(msg: ChatMessage):
         yield f"data: {json.dumps({'status': '💬 Generating answer…'})}\n\n"
 
         # ── Build system prompt ─────────────────────────────────
-        if mode == "web":
+        if mode == "agency":
+            system_prompt = (
+                "You are a recruiting intelligence analyst. The user provided a staffing agency's job board.\n"
+                "I have scraped each individual job listing page and provided the FULL job descriptions below.\n\n"
+                "YOUR TASK — Analyze each job description and identify the HIDDEN CLIENT COMPANY:\n\n"
+                "For EACH job listing, output:\n"
+                "1. **Job Title** (from the listing)\n"
+                "2. **Likely Client Company** — Use these clues from the description to identify or guess the client:\n"
+                "   - Industry mentions ('medical device maker', 'fintech startup', 'enterprise SaaS')\n"
+                "   - Location clues ('South Orange County', 'based in Los Alamitos')\n"
+                "   - Company size hints ('one of the largest', 'Fortune 500', 'venture-backed')\n"
+                "   - Product/service clues ('optical surgery space', 'creator monetization platform')\n"
+                "   - Tech stack patterns (specific combos that narrow it down)\n"
+                "   - Any other identifying details\n"
+                "3. **Confidence** — High / Medium / Low based on how specific the clues are\n"
+                "4. **Key Clues** — Quote the exact phrases from the description that led to your guess\n"
+                "5. **Job URL** — Copy EXACTLY from the data, never fabricate\n\n"
+                "RULES:\n"
+                "- If you can identify the company with high confidence, name it\n"
+                "- If you can narrow it to 2-3 possibilities, list them all\n"
+                "- If you can only identify the industry/type, say that\n"
+                "- NEVER make up a company name without evidence from the description\n"
+                "- Use markdown formatting with numbered results\n"
+                "- Group results by confidence level (High first, then Medium, then Low)\n\n"
+                f"SCRAPED JOB LISTINGS:\n{'---'.join(sections)}"
+                f"{skill_block}"
+            )
+        elif mode == "web":
             system_prompt = (
                 "You are a personal AI assistant with access to REAL web search results.\n\n"
                 "ABSOLUTE RULES — VIOLATION = FAILURE:\n"
