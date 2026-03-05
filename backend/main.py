@@ -1201,33 +1201,61 @@ async def delete_conversation(conv_id: str):
     return {"ok": True}
 
 
+import re as _re
+
+# Keywords that signal the user wants real web results, not doc search
+_WEB_INTENT_PATTERNS = [
+    r"\bfind\b.*\b(companies|jobs|hiring|openings|positions|listings)\b",
+    r"\bsearch\b.*\b(for|the web|online|google)\b",
+    r"\b(latest|recent|current|today|news|trending)\b",
+    r"\bpull\b.*\b(links|urls|recs|listings|results)\b",
+    r"\b(who is hiring|companies hiring|jobs in|openings in|hiring in)\b",
+    r"\b(give me|show me|list)\b.*\b(companies|jobs|urls|links|websites|results)\b",
+    r"\breal urls?\b",
+    r"\b(top \d+|best \d+|find \d+|list \d+)\b",
+    r"\b(salary|compensation|pay range|glassdoor)\b.*\b(for|at|in)\b",
+]
+_WEB_INTENT_RE = _re.compile("|".join(_WEB_INTENT_PATTERNS), _re.IGNORECASE)
+
+def _looks_like_web_search(query: str) -> bool:
+    """Heuristic: does this query want live web data?"""
+    return bool(_WEB_INTENT_RE.search(query))
+
+RELEVANCE_THRESHOLD = 0.75   # ChromaDB distance; lower = more similar
+
 @app.post("/chat")
 async def chat(msg: ChatMessage):
     chat_model         = msg.model or DEFAULT_MODEL
     question_embedding = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
     col                = get_collection()
 
-    # If the user clicked a specific feed item, pin retrieval to that source only
+    # ── Step 1: Try vault retrieval ─────────────────────────────
     if msg.pinned_source:
         results = col.query(
             query_embeddings=[question_embedding],
             n_results=10,
             where={"source": msg.pinned_source}
         )
-        # Fall back to normal search if pinned source has no chunks
         if not results["documents"][0]:
             results = col.query(query_embeddings=[question_embedding], n_results=6)
     else:
         results = col.query(query_embeddings=[question_embedding], n_results=6)
 
-    if not results["documents"][0]:
-        def no_docs():
-            yield f"data: {json.dumps({'token': 'No documents indexed yet in this workspace. Upload a file or paste a URL to get started.'})}\n\n"
-            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
-        return StreamingResponse(no_docs(), media_type="text/event-stream")
+    # Check if vault results are actually relevant
+    vault_docs    = results["documents"][0] if results["documents"][0] else []
+    vault_meta    = results["metadatas"][0] if vault_docs else []
+    vault_dists   = results["distances"][0] if vault_docs else []
+    relevant_docs = [(d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists) if dist < RELEVANCE_THRESHOLD]
 
-    context = "\n\n---\n\n".join(results["documents"][0])
-    sources  = list(set(m["source"] for m in results["metadatas"][0]))
+    vault_has_answer = len(relevant_docs) > 0
+    wants_web        = _looks_like_web_search(msg.message)
+
+    # ── Step 2: Decide routing ──────────────────────────────────
+    # Route: VAULT ONLY   — vault has relevant docs & not a web intent
+    # Route: WEB SEARCH   — vault empty/irrelevant OR explicit web intent
+    # Route: HYBRID       — vault has some data + web intent (show both)
+    use_web   = wants_web or not vault_has_answer
+    use_vault = vault_has_answer
 
     skill_block = ""
     if msg.skill == "__custom__" and msg.custom_prompt:
@@ -1235,33 +1263,108 @@ async def chat(msg: ChatMessage):
     elif msg.skill and msg.skill in SKILL_PROMPTS:
         skill_block = f"\n\n{SKILL_PROMPTS[msg.skill]}"
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
+    def generate():
+        sections    = []
+        all_sources = []
+        mode        = "vault"
+
+        # ── Vault context ───────────────────────────────────────
+        if use_vault:
+            context = "\n\n---\n\n".join(d for d, _ in relevant_docs)
+            sources = list(set(m["source"] for _, m in relevant_docs))
+            sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{context}")
+            all_sources.extend(sources)
+
+        # ── Web search ──────────────────────────────────────────
+        if use_web:
+            mode = "hybrid" if use_vault else "web"
+            yield f"data: {json.dumps({'status': '🔍 Searching the web…'})}\n\n"
+            search_hits = web_search(msg.message, 8)
+
+            if search_hits:
+                web_context = ""
+                scraped = 0
+                for hit in search_hits:
+                    if scraped >= 4:
+                        break
+                    url   = hit.get("href", "")
+                    title = hit.get("title", url)
+                    body  = hit.get("body", "")
+                    yield f"data: {json.dumps({'status': f'📄 Reading: {title[:50]}…'})}\n\n"
+                    page_text = smart_scrape(url) or body
+                    if page_text:
+                        web_context += f"\n\nSource: {title}\nURL: {url}\n{page_text}"
+                        all_sources.append(f"[{title}]({url})")
+                        scraped += 1
+                    elif body:
+                        web_context += f"\n\nSource: {title}\nURL: {url}\n{body}"
+                        all_sources.append(f"[{title}]({url})")
+                        scraped += 1
+
+                if web_context:
+                    sections.append(f"FROM THE WEB (real search results):\n{web_context}")
+                else:
+                    yield f"data: {json.dumps({'status': '⚠️ No web results found.'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': '⚠️ Web search returned nothing.'})}\n\n"
+
+        # ── No data at all ──────────────────────────────────────
+        if not sections:
+            yield f"data: {json.dumps({'token': 'No relevant information found in your documents or the web. Try rephrasing your question or upload some files first.'})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'status': '💬 Generating answer…'})}\n\n"
+
+        # ── Build system prompt ─────────────────────────────────
+        if mode == "web":
+            system_prompt = (
+                "You are a personal AI assistant with access to REAL web search results.\n\n"
+                "STRICT RULES:\n"
+                "1. ONLY use information from the search results provided below.\n"
+                "2. NEVER fabricate URLs — only include URLs that appear in the sources.\n"
+                "3. NEVER make up company names, job titles, or facts not in the sources.\n"
+                "4. If the search results don't contain what the user wants, say so.\n"
+                "5. Always cite your sources with the real URL.\n"
+                "6. Use markdown formatting where helpful.\n\n"
+                f"SEARCH RESULTS:\n{'---'.join(sections)}"
+                f"{skill_block}"
+            )
+        elif mode == "hybrid":
+            system_prompt = (
+                "You are a personal AI assistant. You have access to the user's private documents AND real web search results.\n\n"
+                "STRICT RULES:\n"
+                "1. ONLY use information from the sources below — never invent anything.\n"
+                "2. NEVER fabricate URLs — only include URLs from the web results.\n"
+                "3. Clearly distinguish between info from private docs vs web results.\n"
+                "4. Be concise and direct. Use markdown.\n\n"
+                f"SOURCES:\n{'---'.join(sections)}"
+                f"{skill_block}"
+            )
+        else:
+            system_prompt = (
                 "You are a personal AI assistant. You have access ONLY to documents the user has explicitly indexed.\n\n"
                 "STRICT RULES:\n"
                 "1. NEVER invent, fabricate, or guess information.\n"
                 "2. ONLY use information literally present in the documents below.\n"
                 "3. If the answer isn't in the documents, say so clearly.\n"
                 "4. Be concise and direct.\n"
-                "5. Use markdown formatting where helpful (headers, bold, bullet lists, code blocks).\n\n"
-                f"INDEXED DOCUMENTS:\n{context}"
+                "5. Use markdown formatting where helpful.\n\n"
+                f"INDEXED DOCUMENTS:\n{'---'.join(sections)}"
                 f"{skill_block}"
             )
-        }
-    ]
-    for h in msg.history[-6:]:
-        messages.append(h)
-    messages.append({"role": "user", "content": msg.message})
 
-    def generate():
+        messages = [{"role": "system", "content": system_prompt}]
+        for h in msg.history[-6:]:
+            messages.append(h)
+        messages.append({"role": "user", "content": msg.message})
+
         stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
         for chunk in stream:
             token = chunk["message"]["content"]
             if token:
                 yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'sources': all_sources})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
