@@ -768,7 +768,7 @@ function setStep(id, state, text) {
 async function checkSetup() {
   try {
     const h = await fetch(`${API}/health`,{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
-    setStep('s-backend','done','✓ Running');
+    setStep('s-backend','done',h.version ? `✓ Running v${h.version}` : '✓ Running');
     setStep('s-ollama', h.ollama?'done':'active', h.ollama?'✓ Ready':'✗ Not found');
     setStep('s-embed',  h.embed_model?'done':'active', h.embed_model?'✓ Ready':'✗ Missing');
     setStep('s-llm',    h.chat_model?'done':'active',  h.chat_model?'✓ Ready':'✗ Missing');

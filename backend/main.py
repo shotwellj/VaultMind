@@ -357,6 +357,9 @@ async def lifespan(app: FastAPI):
         _watcher_observer.join()
 
 app = FastAPI(lifespan=lifespan)
+print(f"\n{'='*50}")
+print(f"  VaultMind v0.5.3 starting up…")
+print(f"{'='*50}\n")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1531,7 +1534,10 @@ async def chat(msg: ChatMessage):
     # Route: WEB SEARCH   — vault empty/irrelevant OR explicit web intent OR URL pasted
     # Route: HYBRID       — vault has some data + web intent (but no URL pasted)
     is_agent_mode = (msg.mode == "agent")
+    print(f"[VaultMind v0.5.3] ── /chat routing ──")
+    print(f"  mode={msg.mode!r}  has_user_urls={has_user_urls}  wants_web={wants_web}  vault_has_answer={vault_has_answer}")
     if has_user_urls:
+        print(f"  → URL detected: {_extract_urls(msg.message)[:2]}")
         # URL pasted → pure web mode, ignore vault completely
         use_web   = True
         use_vault = False
@@ -1589,6 +1595,7 @@ async def chat(msg: ChatMessage):
                     # ── Staffing Agency Deep-Scrape Mode ──
                     if _is_staffing_agency_url(u_url):
                         is_agency_mode = True
+                        print(f"[VaultMind v0.5.3] ✓ Staffing agency detected: {domain}")
                         yield f"data: {json.dumps({'status': f'🏢 Detected staffing agency: {domain}…'})}\n\n"
                         yield f"data: {json.dumps({'status': '📋 Extracting job listings…'})}\n\n"
                         agency_listings = _scrape_agency_listing_page(u_url)
@@ -1599,6 +1606,8 @@ async def chat(msg: ChatMessage):
                             for listing in enriched:
                                 all_sources.append(f"[{listing.get('title','')[:60]}]({listing['url']})")
                             agency_job_details = enriched
+                            desc_lengths = [len(e.get('description','')) for e in enriched]
+                            print(f"[VaultMind v0.5.3] Deep-scraped {len(enriched)} jobs, desc lengths: {desc_lengths[:5]}...")
                         else:
                             yield f"data: {json.dumps({'status': '⚠️ Could not extract listings from agency page.'})}\n\n"
                         continue  # Skip normal scraping for agency URLs
@@ -1635,8 +1644,15 @@ async def chat(msg: ChatMessage):
                         yield f"data: {json.dumps({'status': f'⚠️ Could not fetch: {domain}'})}\n\n"
 
             # ── Phase B: Search the web for additional results ──
-            yield f"data: {json.dumps({'status': '🔍 Searching the web…'})}\n\n"
-            search_hits = multi_search(msg.message, 12)
+            # SKIP web search when in agency mode — the deep-scrape pipeline
+            # already has the real data.  Generic web search for "recruiting
+            # agency …" just pollutes with Robert Half / Chegg / spam.
+            if is_agency_mode and agency_job_details:
+                print(f"[VaultMind v0.5.3] Agency mode active with {len(agency_job_details)} listings — skipping Phase B web search")
+                search_hits = []
+            else:
+                yield f"data: {json.dumps({'status': '🔍 Searching the web…'})}\n\n"
+                search_hits = multi_search(msg.message, 12)
 
             if search_hits:
                 for hit in search_hits:
@@ -1705,6 +1721,8 @@ async def chat(msg: ChatMessage):
                 yield f"data: {json.dumps({'status': '🧠 Analyzing clues & identifying clients…'})}\n\n"
                 # Run the Python intelligence engine — does the heavy reasoning
                 intel_report = analyze_agency_listings(agency_job_details)
+                print(f"[VaultMind v0.5.3] Intel report generated: {len(intel_report)} chars")
+                print(f"[VaultMind v0.5.3] Report preview: {intel_report[:200]}...")
                 sections.append(intel_report)
 
             elif structured_listings:
@@ -1914,15 +1932,17 @@ async def status(workspace: str = Query(default="Default")):  # workspace kept f
         count = 0
     return {"chunks_indexed": count, "status": "running"}
 
+VAULTMIND_VERSION = "0.5.3"
+
 @app.get("/health")
 async def health():
     try:
         model_names = [m.model for m in ollama.list().models]
         has_embed   = any("nomic-embed-text" in m for m in model_names)
         has_llm     = any(any(x in m for x in ["mistral", "llama3", "phi3", "gemma", "qwen", "deepseek"]) for m in model_names)
-        return {"ollama": True, "embed_model": has_embed, "chat_model": has_llm, "ready": has_embed and has_llm}
+        return {"ollama": True, "embed_model": has_embed, "chat_model": has_llm, "ready": has_embed and has_llm, "version": VAULTMIND_VERSION}
     except Exception:
-        return {"ollama": False, "embed_model": False, "chat_model": False, "ready": False}
+        return {"ollama": False, "embed_model": False, "chat_model": False, "ready": False, "version": VAULTMIND_VERSION}
 
 # ── Query (non-streaming) ─────────────────────────────────────
 
@@ -2079,4 +2099,5 @@ async def agent(msg: ChatMessage):
     Keeping a separate dumb endpoint was the root cause of agent mode
     returning generic web search results instead of real analysis."""
     msg.mode = "agent"  # Tag it so /chat knows this came from agent toggle
+    print(f"[VaultMind v0.5.3] /agent endpoint → delegating to /chat (message={msg.message[:80]}...)")
     return await chat(msg)
