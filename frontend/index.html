@@ -122,6 +122,8 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
 .card-meta{font-size:11px;color:var(--text5)}
 .card-del{background:none;border:none;color:var(--text5);cursor:pointer;font-size:15px;padding:0;flex-shrink:0;line-height:1;transition:color .15s;margin-top:1px}
 .card-del:hover{color:var(--red)}
+.card-pin{background:none;border:none;color:var(--text5);cursor:pointer;font-size:13px;padding:0 4px;flex-shrink:0;line-height:1;transition:color .15s;margin-top:1px}
+.card-pin:hover{color:var(--accent)}.card-pin.active{color:var(--accent)}
 .section-empty{font-size:11px;color:var(--text5);padding:10px 4px;font-style:italic}
 .section-divider{height:1px;background:var(--border);margin:2px 0}
 /* ── Conversation history ── */
@@ -559,6 +561,7 @@ let customPrompt  = '';
 let history       = [];
 let busy          = false;
 let agentMode     = false;
+let pinnedSource  = '';  // when set, chat only searches this file
 let docCount=0,webCount=0,emailCount=0,notionCount=0,photosCount=0,healthCount=0,obsidianCount=0;
 
 // ── DOM ────────────────────────────────────────────────────────
@@ -657,6 +660,27 @@ modeBtn.onclick = () => {
   modeBtn.textContent = agentMode ? '🌐 Agent' : '🔒 Vault';
   qEl.placeholder = agentMode ? 'Ask anything — searches vault + live web…' : 'Ask anything — searches docs + web automatically…';
 };
+
+// ── Pin a file to focus chat ───────────────────────────────────
+function togglePin(encodedName, btn) {
+  const name = decodeURIComponent(encodedName);
+  if (pinnedSource === name) {
+    // Unpin
+    pinnedSource = '';
+    btn.classList.remove('active');
+    btn.title = 'Focus chat on this file';
+    qEl.placeholder = 'Ask anything — searches docs + web automatically…';
+    toast('📌 Unpinned — searching all documents');
+  } else {
+    // Unpin any previous
+    document.querySelectorAll('.card-pin.active').forEach(b => b.classList.remove('active'));
+    pinnedSource = name;
+    btn.classList.add('active');
+    const shortName = name.length > 40 ? name.slice(0,40)+'…' : name;
+    qEl.placeholder = `Asking about: ${shortName}`;
+    toast(`📌 Focused on: ${shortName}`);
+  }
+}
 function setQ(text) { qEl.value = text; qEl.focus(); document.getElementById('empty')?.remove(); }
 
 // ── Prompts Panel ──────────────────────────────────────────────
@@ -918,7 +942,7 @@ function addFileCard(name, chunks, title) {
   const label=friendlyName(name,title);
   const el=document.createElement('div');
   el.className='file-card';el.id=safeId;
-  el.innerHTML=`<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${label}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${section}')">×</button>`;
+  el.innerHTML=`<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${label}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-pin" title="Focus chat on this file" onclick="togglePin('${encodeURIComponent(name)}',this)">📌</button><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${section}')">×</button>`;
   listEl.appendChild(el);
 }
 
@@ -1048,7 +1072,7 @@ async function ask() {
   let fullText='';
   try {
     // Build chat body — include custom prompt text if active
-    const chatBody={message:text,history,model:currentModel,skill:currentSkill};
+    const chatBody={message:text,history,model:currentModel,skill:currentSkill,pinned_source:pinnedSource||''};
     if(currentSkill==='__custom__'&&window._activePromptText) chatBody.custom_prompt=window._activePromptText;
 
     const res=await fetch(agentMode?`${API}/agent`:`${API}/chat`,{

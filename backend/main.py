@@ -414,6 +414,14 @@ def get_collection():
 
 # ── Models API ────────────────────────────────────────────────
 
+@app.get("/debug-chunks")
+async def debug_chunks(source: str = Query(...), limit: int = Query(default=5)):
+    """Return raw chunk text for a source — for debugging what was actually indexed."""
+    col = get_collection()
+    results = col.get(where={"source": source}, include=["documents", "metadatas"])
+    docs = results["documents"][:limit]
+    return {"source": source, "total_chunks": len(results["documents"]), "sample_chunks": docs}
+
 @app.get("/vlm-status")
 async def vlm_status():
     """Returns which VLM model is available and whether VLM processing is ready."""
@@ -1649,7 +1657,7 @@ def _deep_scrape_job_pages(job_urls: list[dict], max_pages: int = 15) -> list[di
             results.append(entry)
     return results
 
-RELEVANCE_THRESHOLD = 0.75   # ChromaDB distance; lower = more similar
+RELEVANCE_THRESHOLD = 0.65   # ChromaDB L2 distance; tuned for personal docs
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
@@ -1659,50 +1667,52 @@ async def chat(msg: ChatMessage):
 
     # ── Step 1: Try vault retrieval ─────────────────────────────
     if msg.pinned_source:
+        # Pinned to a specific file — skip threshold, return top chunks from that file only
         results = col.query(
             query_embeddings=[question_embedding],
-            n_results=10,
+            n_results=12,
             where={"source": msg.pinned_source}
         )
-        if not results["documents"][0]:
-            results = col.query(query_embeddings=[question_embedding], n_results=6)
+        vault_docs  = results["documents"][0] if results["documents"][0] else []
+        vault_meta  = results["metadatas"][0] if vault_docs else []
+        relevant_docs = [(d, m) for d, m in zip(vault_docs, vault_meta)]
+        vault_has_answer = len(relevant_docs) > 0
+        use_web   = False
+        use_vault = True
     else:
-        results = col.query(query_embeddings=[question_embedding], n_results=6)
+        results = col.query(query_embeddings=[question_embedding], n_results=8)
+        vault_docs    = results["documents"][0] if results["documents"][0] else []
+        vault_meta    = results["metadatas"][0] if vault_docs else []
+        vault_dists   = results["distances"][0] if vault_docs else []
 
-    # Check if vault results are actually relevant
-    vault_docs    = results["documents"][0] if results["documents"][0] else []
-    vault_meta    = results["metadatas"][0] if vault_docs else []
-    vault_dists   = results["distances"][0] if vault_docs else []
-    relevant_docs = [(d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists) if dist < RELEVANCE_THRESHOLD]
+        def is_personal_doc(meta: dict) -> bool:
+            src = meta.get("source", "")
+            return not (src.startswith("🌐") or src.startswith("http://") or src.startswith("https://"))
 
-    vault_has_answer = len(relevant_docs) > 0
-    wants_web        = _looks_like_web_search(msg.message)
-    has_user_urls    = bool(_extract_urls(msg.message))
+        relevant_docs = [
+            (d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
+            if dist < RELEVANCE_THRESHOLD and is_personal_doc(m)
+        ]
+        if not relevant_docs:
+            relevant_docs = [
+                (d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
+                if dist < 0.85 and is_personal_doc(m)
+            ]
+        vault_has_answer = len(relevant_docs) > 0
+        has_user_urls = bool(_extract_urls(msg.message))
+        wants_web     = _looks_like_web_search(msg.message)
+        is_agent_mode = (msg.mode == "agent")
 
-    # ── Step 2: Decide routing ──────────────────────────────────
-    # RULE: If user pasted a URL → ALWAYS web mode, skip vault entirely.
-    #       The user explicitly wants data from THAT URL, not old vault docs.
-    # Route: VAULT ONLY   — vault has relevant docs & not a web intent & no URLs
-    # Route: WEB SEARCH   — vault empty/irrelevant OR explicit web intent OR URL pasted
-    # Route: HYBRID       — vault has some data + web intent (but no URL pasted)
-    is_agent_mode = (msg.mode == "agent")
-    print(f"[VaultMind v0.5.3] ── /chat routing ──")
-    print(f"  mode={msg.mode!r}  has_user_urls={has_user_urls}  wants_web={wants_web}  vault_has_answer={vault_has_answer}")
-    if has_user_urls:
-        print(f"  → URL detected: {_extract_urls(msg.message)[:2]}")
-        # URL pasted → pure web mode, ignore vault completely
-        use_web   = True
-        use_vault = False
-    elif is_agent_mode:
-        # Agent toggle ON → always enable web, vault only if relevant
-        use_web   = True
-        use_vault = vault_has_answer
-    else:
-        use_web   = wants_web or not vault_has_answer
-        use_vault = vault_has_answer
-        # If wants_web is True, still skip vault to avoid pollution from old indexed pages
-        if wants_web:
-            use_vault = False
+        if has_user_urls:
+            use_web = True; use_vault = False
+        elif msg.mode == "vault" or (not is_agent_mode and not wants_web):
+            use_web = False; use_vault = True
+        elif is_agent_mode:
+            use_web = True; use_vault = vault_has_answer
+        else:
+            use_web = wants_web or not vault_has_answer
+            use_vault = vault_has_answer
+            if wants_web: use_vault = False
 
     skill_block = ""
     if msg.skill == "__custom__" and msg.custom_prompt:
