@@ -96,7 +96,11 @@ TEMPLATES = {
 {citation}
 
 TASK: Answer the following research question using ONLY the provided context.
-Structure your answer clearly. Start with a direct answer, then provide supporting details.
+
+MANDATORY FORMAT:
+1. First, quote the relevant lines from the source documents exactly as they appear (use > blockquotes).
+2. Then provide your answer based ONLY on those quotes.
+3. If a detail is not in the quotes, do NOT include it in your answer.
 
 CONTEXT:
 {context}
@@ -213,7 +217,12 @@ REQUEST: {question}""",
 {citation}
 
 TASK: Analyze the provided information. Identify patterns, trends, and key insights.
-Distinguish between what the data shows and what you are inferring.
+
+MANDATORY FORMAT:
+1. First, quote the relevant lines from the source documents (use > blockquotes).
+2. Then provide your analysis based ONLY on those quotes.
+3. Clearly distinguish between what the data shows and what you are inferring.
+4. NEVER substitute job titles, names, dates, or roles from your training data. Use EXACTLY what the source says.
 
 DATA/CONTEXT:
 {context}
@@ -267,7 +276,9 @@ EXTRACT: {question}""",
     "chat": {
         "standard": """You are a helpful personal assistant with access to the user's knowledge base.
 
-Keep responses conversational and natural. Reference documents when relevant.
+{grounding}
+
+IMPORTANT: When answering questions about the user's documents, first quote the relevant text from the source (use > blockquotes), then answer based ONLY on those quotes. Never guess or fill in details that are not in the source text.
 
 {context_block}
 
@@ -278,6 +289,9 @@ USER: {question}""",
         "strict": """You are a helpful assistant. Keep your answer factual and grounded.
 
 {grounding}
+
+MANDATORY: Quote the exact source text before answering. If the source says a specific job title, name, or date, use EXACTLY those words. Do not substitute from your training data.
+
 {context_block}
 
 USER: {question}""",
