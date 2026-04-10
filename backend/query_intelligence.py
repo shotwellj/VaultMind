@@ -381,9 +381,8 @@ def classify_query(
     # ── Step 4: Web search decision ──────────────────────────
     needs_web = False
     web_patterns = [
-        r"\b(latest|recent|current|today|this week|this month|2024|2025|2026)\b",
-        r"\b(news|update|announcement|release|published)\b",
-        r"\b(find online|search for|look up online|google|web search)\b",
+        r"\b(find online|look up online|google|web search|search the internet)\b",
+        r"\b(trending|breaking news)\b",
         r"\bhttps?://\b",
     ]
     for pattern in web_patterns:
