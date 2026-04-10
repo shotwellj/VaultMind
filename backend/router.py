@@ -1,9 +1,11 @@
 """
-VaultMind Model Router — Phase 1
+VaultMind Model Router — Phase 1 (Enhanced)
 Routes incoming files and queries to the right model:
   VLM  → scanned PDFs, images, forms, handwriting
   SLM  → text queries, RAG, summarization
   LAM  → agentic commands (Phase 3)
+
+Now integrated with the Query Intelligence Engine for smarter routing.
 """
 
 import os
@@ -94,6 +96,64 @@ def route_query(query: str) -> RouteType:
         if trigger in q_lower:
             return RouteType.LAM
     return RouteType.SLM
+
+
+def route_query_smart(query: str, conversation_history: list = None) -> dict:
+    """Enhanced routing that uses the Query Intelligence Engine.
+
+    Returns a dict with:
+      - route: RouteType (VLM/SLM/LAM)
+      - model: recommended Ollama model name
+      - intent: query intent (research/draft/summarize/etc.)
+      - complexity: low/medium/high
+      - needs_web: whether to search the web
+      - needs_vault: whether to search local docs
+      - reasoning: human-readable explanation
+    """
+    try:
+        from query_intelligence import classify_query, QueryIntent
+
+        classification = classify_query(
+            query=query,
+            conversation_history=conversation_history,
+        )
+
+        # Map ACTION intent to LAM route, everything else to SLM
+        if classification.intent == QueryIntent.ACTION:
+            route = RouteType.LAM
+        else:
+            route = RouteType.SLM
+
+        # Also check legacy LAM triggers as a safety net
+        q_lower = query.lower()
+        for trigger in LAM_TRIGGERS:
+            if trigger in q_lower:
+                route = RouteType.LAM
+                break
+
+        return {
+            "route": route,
+            "model": classification.recommended_model,
+            "intent": classification.intent.value,
+            "complexity": classification.complexity.value,
+            "confidence": classification.confidence,
+            "needs_web": classification.needs_web,
+            "needs_vault": classification.needs_vault,
+            "reasoning": classification.reasoning,
+        }
+    except ImportError:
+        # Fallback if query_intelligence not available
+        route = route_query(query)
+        return {
+            "route": route,
+            "model": "mistral",
+            "intent": "chat",
+            "complexity": "medium",
+            "confidence": 0.3,
+            "needs_web": False,
+            "needs_vault": True,
+            "reasoning": "Fallback routing (query intelligence unavailable)",
+        }
 
 
 def describe_route(route: RouteType, filename: str = "") -> str:

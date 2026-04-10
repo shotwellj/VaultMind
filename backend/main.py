@@ -25,6 +25,19 @@ from urllib.parse import urlparse
 from company_intel import analyze_agency_listings
 from router import route_file, route_query, RouteType, IMAGE_EXTENSIONS
 from vlm import extract_pdf_with_vlm, extract_image_with_vlm, get_available_vlm, vlm_available
+from query_intelligence import (
+    classify_query, build_prompt, get_prompt_template,
+    QueryIntent, ComplexityLevel, QueryClassification,
+    get_available_models as qi_get_available_models,
+)
+from conversation_memory import (
+    store_conversation_memory, recall_relevant_memories,
+    build_memory_context, get_memory_collection,
+)
+from privacy_firewall import sanitize_for_search as firewall_sanitize, load_config as load_firewall_config
+from search_proxy import privacy_search, load_search_config
+from context_fusion import fuse_contexts, build_fusion_prompt, FusedContext
+from search_quality import classify_domain
 from lam import (
     run_lam_agent, load_staged, approve_staged_action,
     reject_staged_action, AUDIT_DIR
@@ -497,6 +510,84 @@ async def get_audit_log(limit: int = Query(default=50)):
             pass
     return {"records": records, "total": len(audit_files)}
 
+@app.post("/classify")
+async def classify_endpoint(msg: dict):
+    """Classify a query's intent and complexity without running the full chat pipeline.
+    Useful for the frontend to show real-time intent badges."""
+    query = msg.get("message", "")
+    history = msg.get("history", [])
+    if not query:
+        return {"error": "No message provided"}
+    result = classify_query(query=query, conversation_history=history or None)
+    return {
+        "intent": result.intent.value,
+        "complexity": result.complexity.value,
+        "confidence": result.confidence,
+        "recommended_model": result.recommended_model,
+        "needs_web": result.needs_web,
+        "needs_vault": result.needs_vault,
+        "reasoning": result.reasoning,
+    }
+
+# ── Privacy Firewall API ─────────────────────────────────────
+
+from privacy_firewall import (
+    load_config as _fw_load_config, save_config as _fw_save_config,
+    load_blocklist as _fw_load_blocklist, save_blocklist as _fw_save_blocklist,
+    sanitize as _fw_sanitize, get_audit_log as _fw_get_audit_log,
+    scan_for_data_leakage,
+)
+
+@app.get("/firewall/config")
+async def get_firewall_config():
+    return _fw_load_config()
+
+@app.post("/firewall/config")
+async def update_firewall_config(config: dict):
+    _fw_save_config(config)
+    return {"ok": True}
+
+@app.get("/firewall/blocklist")
+async def get_firewall_blocklist():
+    return {"terms": _fw_load_blocklist()}
+
+@app.post("/firewall/blocklist")
+async def update_firewall_blocklist(data: dict):
+    terms = data.get("terms", [])
+    _fw_save_blocklist(terms)
+    return {"ok": True, "count": len(terms)}
+
+@app.post("/firewall/test")
+async def test_firewall(data: dict):
+    """Test the firewall on a sample text without searching."""
+    text = data.get("text", "")
+    if not text:
+        return {"error": "No text provided"}
+    result = _fw_sanitize(text)
+    return {
+        "sanitized": result.sanitized_text,
+        "entities_found": result.entity_count,
+        "was_modified": result.was_modified,
+        "entities": [
+            {"type": e.entity_type.value if hasattr(e.entity_type, "value") else e.entity_type,
+             "replacement": e.replacement, "confidence": e.confidence}
+            for e in result.entities_found
+        ],
+    }
+
+@app.get("/firewall/audit")
+async def get_firewall_audit(limit: int = 50):
+    return {"entries": _fw_get_audit_log(limit)}
+
+@app.post("/firewall/scan")
+async def scan_data_leakage(data: dict):
+    """AIR Blackbox-compatible data leakage scan."""
+    text = data.get("text", "")
+    context = data.get("context", "prompt")
+    if not text:
+        return {"error": "No text provided"}
+    return scan_for_data_leakage(text, context)
+
 @app.get("/models")
 async def list_models():
     try:
@@ -509,13 +600,86 @@ async def list_models():
 
 # ── Text helpers ──────────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 150) -> list[str]:
-    words  = text.split()
+def chunk_text(text: str, chunk_size: int = 200) -> list:
+    """Section-aware chunking with rich metadata.
+    Returns list of dicts (handled by embed_and_store).
+    Falls back to basic word chunking for very short texts.
+    """
+    words = text.split()
+    # For very short text, just return a simple chunk
+    if len(words) < chunk_size:
+        if text.strip():
+            return [{"text": text.strip(), "section_header": "", "chunk_index": 0, "char_start": 0, "char_end": len(text)}]
+        return []
+    # Use the smart section-aware chunker
+    return chunk_text_smart(text, chunk_size=chunk_size, overlap=40)
+
+
+import re as _re_chunker
+
+def chunk_text_smart(text: str, chunk_size: int = 200, overlap: int = 40) -> list[dict]:
+    """Section-aware chunking that preserves document structure.
+
+    Returns list of dicts with keys: text, section_header, chunk_index, char_start, char_end
+    This gives ChromaDB richer metadata for better retrieval.
+    """
+    # Split on common section headers (markdown ##, ALL CAPS lines, numbered sections)
+    section_pattern = _re_chunker.compile(
+        r'(?:^|\n)'                          # start of line
+        r'(?:'
+        r'#{1,4}\s+.+'                       # markdown headers: ## Section
+        r'|[A-Z][A-Z\s]{4,}(?:\n|$)'        # ALL CAPS HEADERS
+        r'|\d+\.\s+[A-Z].+'                 # numbered sections: 1. Introduction
+        r'|(?:ARTICLE|SECTION|CHAPTER)\s+\d+' # legal sections
+        r')',
+        _re_chunker.MULTILINE
+    )
+
+    # Find all section boundaries
+    section_starts = [m.start() for m in section_pattern.finditer(text)]
+    if not section_starts or section_starts[0] != 0:
+        section_starts.insert(0, 0)
+
+    # Build sections with their headers
+    sections = []
+    for i, start in enumerate(section_starts):
+        end = section_starts[i + 1] if i + 1 < len(section_starts) else len(text)
+        section_text = text[start:end].strip()
+        if not section_text:
+            continue
+
+        # Extract header (first line of section)
+        first_line = section_text.split('\n')[0].strip().lstrip('#').strip()
+        if len(first_line) > 80:
+            first_line = first_line[:80]
+
+        sections.append({"header": first_line, "text": section_text, "char_start": start})
+
+    # If no sections detected, treat whole doc as one section
+    if not sections:
+        sections = [{"header": "", "text": text, "char_start": 0}]
+
+    # Now chunk each section with overlap
     chunks = []
-    for i in range(0, len(words), chunk_size - 20):
-        chunk = " ".join(words[i:i + chunk_size])
-        if chunk.strip():
-            chunks.append(chunk)
+    chunk_idx = 0
+    for section in sections:
+        words = section["text"].split()
+        if not words:
+            continue
+        step = max(1, chunk_size - overlap)
+        for i in range(0, len(words), step):
+            chunk_words = words[i:i + chunk_size]
+            chunk_str = " ".join(chunk_words)
+            if chunk_str.strip():
+                chunks.append({
+                    "text": chunk_str,
+                    "section_header": section["header"],
+                    "chunk_index": chunk_idx,
+                    "char_start": section["char_start"],
+                    "char_end": section["char_start"] + len(section["text"]),
+                })
+                chunk_idx += 1
+
     return chunks
 
 def extract_text_from_file(contents: bytes, filename: str) -> str:
@@ -532,14 +696,33 @@ def extract_text_from_file(contents: bytes, filename: str) -> str:
         return contents.decode("utf-8", errors="ignore")
     return ""
 
-def embed_and_store(chunks: list[str], source: str, col):
+def embed_and_store(chunks, source: str, col):
+    """Embed and store chunks in ChromaDB. Accepts either:
+    - list[str] (legacy basic chunks)
+    - list[dict] (smart chunks with metadata from chunk_text_smart)
+    """
     for i, chunk in enumerate(chunks):
-        embedding = ollama.embeddings(model=EMBED_MODEL, prompt=chunk)["embedding"]
+        # Support both old list[str] and new list[dict] format
+        if isinstance(chunk, dict):
+            text = chunk["text"]
+            meta = {
+                "source": source,
+                "chunk": chunk.get("chunk_index", i),
+                "section": chunk.get("section_header", ""),
+                "char_start": chunk.get("char_start", 0),
+                "char_end": chunk.get("char_end", 0),
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            text = chunk
+            meta = {"source": source, "chunk": i}
+
+        embedding = ollama.embeddings(model=EMBED_MODEL, prompt=text)["embedding"]
         col.upsert(
             ids=[f"{source}_{i}"],
             embeddings=[embedding],
-            documents=[chunk],
-            metadatas=[{"source": source, "chunk": i}]
+            documents=[text],
+            metadatas=[meta]
         )
         if i % 10 == 0:
             print(f"  ✓ {i}/{len(chunks)}")
@@ -1345,7 +1528,7 @@ async def get_conversation(conv_id: str):
 
 @app.post("/conversations")
 async def save_conversation(conv: ConversationSave):
-    """Save or update a conversation."""
+    """Save or update a conversation and store a memory summary."""
     fpath = os.path.join(CONVERSATIONS_DIR, f"{conv.id}.json")
     data = {
         "id":       conv.id,
@@ -1356,6 +1539,27 @@ async def save_conversation(conv: ConversationSave):
     }
     with open(fpath, "w") as f:
         json.dump(data, f, indent=2)
+
+    # Store conversation memory in background (don't block the save)
+    if conv.messages and len(conv.messages) >= 4:
+        try:
+            import threading
+            def _store_memory():
+                try:
+                    client = chromadb.PersistentClient(path=os.path.join(DATA_DIR, "chroma"))
+                    store_conversation_memory(
+                        chroma_client=client,
+                        conversation_id=conv.id,
+                        summary="",  # auto-generate
+                        messages=conv.messages,
+                        model=conv.model or "mistral",
+                    )
+                except Exception as e:
+                    print(f"[ConversationMemory] Background store failed: {e}")
+            threading.Thread(target=_store_memory, daemon=True).start()
+        except Exception as e:
+            print(f"[ConversationMemory] Failed to start memory thread: {e}")
+
     return {"ok": True}
 
 @app.delete("/conversations/{conv_id}")
@@ -1661,9 +1865,40 @@ RELEVANCE_THRESHOLD = 0.65   # ChromaDB L2 distance; tuned for personal docs
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
-    chat_model         = msg.model or DEFAULT_MODEL
+    # ── Step 0: Query Intelligence -- classify before anything else ──
+    try:
+        available = qi_get_available_models()
+    except Exception:
+        available = []
+    classification = classify_query(
+        query=msg.message,
+        conversation_history=msg.history or None,
+        available_models=available or None,
+    )
+    print(f"[QueryIntel] {classification.reasoning}")
+    print(f"[QueryIntel] Intent={classification.intent.value} Model={classification.recommended_model} Template={classification.prompt_template}")
+
+    # Use the query intelligence model recommendation if the user didn't pick one
+    if msg.model and msg.model != "mistral":
+        chat_model = msg.model  # user explicitly chose a model, respect it
+    elif classification.recommended_model:
+        chat_model = classification.recommended_model
+    else:
+        chat_model = msg.model or DEFAULT_MODEL
+
     question_embedding = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
     col                = get_collection()
+
+    # ── Step 0.5: Recall relevant past conversations ────────────
+    memory_context = ""
+    try:
+        chroma_client = chromadb.PersistentClient(path=os.path.join(DATA_DIR, "chroma"))
+        memories = recall_relevant_memories(chroma_client, msg.message, n_results=3, max_age_days=90)
+        memory_context = build_memory_context(memories)
+        if memory_context:
+            print(f"[ConversationMemory] Recalled {len(memories)} relevant past conversations")
+    except Exception as e:
+        print(f"[ConversationMemory] Recall failed (non-fatal): {e}")
 
     # ── Step 1: Try vault retrieval ─────────────────────────────
     if msg.pinned_source:
@@ -1689,18 +1924,31 @@ async def chat(msg: ChatMessage):
             src = meta.get("source", "")
             return not (src.startswith("🌐") or src.startswith("http://") or src.startswith("https://"))
 
-        relevant_docs = [
-            (d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
+        relevant_docs_with_dist = [
+            (d, m, dist) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
             if dist < RELEVANCE_THRESHOLD and is_personal_doc(m)
         ]
-        if not relevant_docs:
-            relevant_docs = [
-                (d, m) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
+        if not relevant_docs_with_dist:
+            relevant_docs_with_dist = [
+                (d, m, dist) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
                 if dist < 0.85 and is_personal_doc(m)
             ]
+
+        # Re-rank: boost chunks whose section header matches the query keywords
+        q_words = set(msg.message.lower().split())
+        def rerank_score(doc_text, meta, dist):
+            score = dist  # lower is better (L2 distance)
+            section = meta.get("section", "").lower()
+            if section:
+                overlap = len(q_words & set(section.split()))
+                score -= overlap * 0.05  # boost by 0.05 per matching keyword
+            return score
+
+        relevant_docs_with_dist.sort(key=lambda x: rerank_score(x[0], x[1], x[2]))
+        relevant_docs = [(d, m) for d, m, _ in relevant_docs_with_dist]
         vault_has_answer = len(relevant_docs) > 0
         has_user_urls = bool(_extract_urls(msg.message))
-        wants_web     = _looks_like_web_search(msg.message)
+        wants_web     = _looks_like_web_search(msg.message) or classification.needs_web
         is_agent_mode = (msg.mode == "agent")
 
         if has_user_urls:
@@ -1727,7 +1975,15 @@ async def chat(msg: ChatMessage):
 
         # ── Vault context ───────────────────────────────────────
         if use_vault:
-            context = "\n\n---\n\n".join(d for d, _ in relevant_docs)
+            context_parts = []
+            for d, m in relevant_docs:
+                section_label = m.get("section", "")
+                src = m.get("source", "unknown")
+                if section_label:
+                    context_parts.append(f"[Source: {src} | Section: {section_label}]\n{d}")
+                else:
+                    context_parts.append(f"[Source: {src}]\n{d}")
+            context = "\n\n---\n\n".join(context_parts)
             sources = list(set(m["source"] for _, m in relevant_docs))
             sections.append(f"FROM YOUR PRIVATE DOCUMENTS:\n{context}")
             all_sources.extend(sources)
@@ -1741,6 +1997,21 @@ async def chat(msg: ChatMessage):
             scraped = 0
             seen_domains = set()
             seen_urls = set()
+
+            # ── Privacy Firewall: sanitize query before ANY web call ──
+            firewall_cfg = load_firewall_config()
+            sanitized_query, firewall_result = firewall_sanitize(msg.message, firewall_cfg)
+            if firewall_result.was_modified:
+                stripped_types = set()
+                for e in firewall_result.entities_found:
+                    t = e.entity_type
+                    stripped_types.add(t.value if hasattr(t, "value") else t)
+                type_list = ", ".join(sorted(stripped_types))
+                fw_msg = f"Stripped {firewall_result.entity_count} entities ({type_list}) before web search"
+                yield f"data: {json.dumps({'status': fw_msg})}\n\n"
+                print(f"[PrivacyFirewall] Sanitized for web: \"{sanitized_query}\"")
+            else:
+                sanitized_query = msg.message  # No changes needed
 
             # ── Phase A: Scrape any URLs the user explicitly provided ──
             is_agency_mode = False
@@ -1814,7 +2085,8 @@ async def chat(msg: ChatMessage):
                 search_hits = []
             else:
                 yield f"data: {json.dumps({'status': '🔍 Searching the web…'})}\n\n"
-                search_hits = multi_search(msg.message, 12)
+                # Use sanitized query for web search (privacy firewall applied)
+                search_hits = multi_search(sanitized_query, 12)
 
             if search_hits:
                 for hit in search_hits:
@@ -1914,7 +2186,11 @@ async def chat(msg: ChatMessage):
                 sections.append(listing_text)
 
             if web_context:
-                sections.append(f"FROM THE WEB (real search results):\n{web_context}")
+                # Add quality tier info to web context header
+                privacy_label = ""
+                if firewall_result.was_modified:
+                    privacy_label = " (query was sanitized by Privacy Firewall)"
+                sections.append(f"FROM THE WEB{privacy_label} (real search results):\n{web_context}")
 
             if not web_context and not structured_listings and not agency_job_details:
                 yield f"data: {json.dumps({'status': '⚠️ No web results found.'})}\n\n"
@@ -1925,7 +2201,11 @@ async def chat(msg: ChatMessage):
             yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
             return
 
-        yield f"data: {json.dumps({'status': '💬 Generating answer…'})}\n\n"
+        # Stream classification info so the UI can show what VaultMind understood
+        intent_label = classification.intent.value.capitalize()
+        complexity_label = classification.complexity.value.upper()
+        yield f"data: {json.dumps({'status': f'🧠 {intent_label} query (complexity: {complexity_label}) -- using {chat_model}'})}\n\n"
+        yield f"data: {json.dumps({'status': '💬 Generating answer...'})}\n\n"
 
         # ── Build system prompt ─────────────────────────────────
         if mode == "agency":
@@ -1976,17 +2256,23 @@ async def chat(msg: ChatMessage):
                 f"{skill_block}"
             )
         else:
+            # Use intent-aware prompt template from Query Intelligence Engine
+            context_block = '---'.join(sections)
+            intent_prompt = build_prompt(classification, msg.message, context_block)
+            # Wrap with vault-specific guardrails
             system_prompt = (
-                "You are a personal AI assistant. You have access ONLY to documents the user has explicitly indexed.\n\n"
+                "You are VaultMind, a personal AI assistant. You have access ONLY to documents the user has explicitly indexed.\n\n"
                 "STRICT RULES:\n"
                 "1. NEVER invent, fabricate, or guess information.\n"
                 "2. ONLY use information literally present in the documents below.\n"
-                "3. If the answer isn't in the documents, say so clearly.\n"
-                "4. Be concise and direct.\n"
-                "5. Use markdown formatting where helpful.\n\n"
-                f"INDEXED DOCUMENTS:\n{'---'.join(sections)}"
+                "3. If the answer isn't in the documents, say so clearly.\n\n"
+                f"{intent_prompt}"
                 f"{skill_block}"
             )
+
+        # Inject conversation memory if available
+        if memory_context:
+            system_prompt += f"\n\n{memory_context}"
 
         messages = [{"role": "system", "content": system_prompt}]
         for h in msg.history[-6:]:
