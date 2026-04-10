@@ -496,6 +496,19 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
   <div class="modal">
     <div class="modal-header"><h2>⚙️ Settings</h2><button class="modal-close" onclick="closeSettings()">✕</button></div>
     <div class="modal-body">
+      <!-- Your Profile -->
+      <div class="connector-section">
+        <div class="connector-head"><div class="connector-name"><span class="connector-icon">👤</span><div><div class="connector-label">Your Profile</div><div class="connector-sub">Tell VaultMind who you are so it can answer personal questions accurately</div></div></div></div>
+        <div class="connector-fields">
+          <div class="field-row"><div class="field-label">Full Name</div><input class="field-input" type="text" id="profile-name" placeholder="Jason Shotwell"></div>
+          <div class="field-row"><div class="field-label">LinkedIn URL</div><input class="field-input" type="text" id="profile-linkedin" placeholder="https://linkedin.com/in/yourname"><div class="field-hint">Used as fallback for career and work history questions</div></div>
+          <div class="field-row"><div class="field-label">Current Title</div><input class="field-input" type="text" id="profile-title" placeholder="Founder, Recruiter, etc."></div>
+          <div class="field-row"><div class="field-label">Location</div><input class="field-input" type="text" id="profile-location" placeholder="City, State"></div>
+        </div>
+        <div class="connector-actions"><button class="btn-save" onclick="saveProfile()">Save Profile</button></div>
+        <div class="sync-status" id="profile-status"></div>
+      </div>
+      <div class="modal-divider"></div>
       <!-- Notion -->
       <div class="connector-section">
         <div class="connector-head"><div class="connector-name"><span class="connector-icon">📓</span><div><div class="connector-label">Notion</div><div class="connector-sub">Index pages from your workspace</div></div></div><label class="toggle"><input type="checkbox" id="notion-enabled"><span class="toggle-slider"></span></label></div>
@@ -608,9 +621,39 @@ function closeSidebarOnMobile() { if(isMobile()) closeSidebar(); }
 
 // ── Settings modal ─────────────────────────────────────────────
 document.getElementById('gear-btn').onclick = openSettings;
-function openSettings() { loadConnectorConfig(); loadWatchFolders(); document.getElementById('settings-modal').classList.remove('hidden'); }
+function openSettings() { loadConnectorConfig(); loadWatchFolders(); loadProfile(); document.getElementById('settings-modal').classList.remove('hidden'); }
 function closeSettings() { document.getElementById('settings-modal').classList.add('hidden'); }
 document.getElementById('settings-modal').onclick = e => { if(e.target.id==='settings-modal') closeSettings(); };
+
+// ── Profile ───────────────────────────────────────────────────
+async function loadProfile() {
+  try {
+    const data = await fetch(`${API}/profile`).then(r => r.json());
+    document.getElementById('profile-name').value = data.name || '';
+    document.getElementById('profile-linkedin').value = data.linkedin_url || '';
+    document.getElementById('profile-title').value = data.current_title || '';
+    document.getElementById('profile-location').value = data.location || '';
+  } catch(e) { console.log('Profile load error:', e); }
+}
+
+async function saveProfile() {
+  const statusEl = document.getElementById('profile-status');
+  try {
+    const body = {
+      name: document.getElementById('profile-name').value.trim(),
+      linkedin_url: document.getElementById('profile-linkedin').value.trim(),
+      current_title: document.getElementById('profile-title').value.trim(),
+      location: document.getElementById('profile-location').value.trim(),
+    };
+    await fetch(`${API}/profile`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    statusEl.textContent = '✅ Profile saved';
+    statusEl.style.color = 'var(--green)';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  } catch(e) {
+    statusEl.textContent = '❌ Save failed';
+    statusEl.style.color = 'var(--red)';
+  }
+}
 
 async function loadConnectorConfig() {
   try {

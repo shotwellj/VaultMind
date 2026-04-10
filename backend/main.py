@@ -41,6 +41,10 @@ from search_quality import classify_domain
 from quality_gate import run_quality_gate, ConfidenceLevel
 from citation_engine import cite_response, format_sources_for_frontend
 from adaptive_prompts import build_adaptive_prompt, get_retry_prompt, truncate_context
+from user_profile import (
+    get_profile, update_profile, has_profile,
+    get_identity_context, get_linkedin_context, _is_career_question,
+)
 from feedback_loop import (
     store_feedback, FeedbackEntry, get_feedback_summary,
     get_route_stats, get_best_route, get_routing_overrides,
@@ -592,6 +596,21 @@ from privacy_firewall import (
     scan_for_data_leakage,
 )
 
+# ── User Profile Endpoints ──────────────────────────────────
+@app.get("/profile")
+async def get_user_profile():
+    return get_profile()
+
+@app.post("/profile")
+async def update_user_profile(data: dict):
+    updated = update_profile(data)
+    return updated
+
+@app.get("/profile/status")
+async def profile_status():
+    return {"has_profile": has_profile(), "profile": get_profile()}
+
+# ── Firewall Endpoints ──────────────────────────────────────
 @app.get("/firewall/config")
 async def get_firewall_config():
     return _fw_load_config()
@@ -2564,10 +2583,31 @@ async def chat(msg: ChatMessage):
     elif msg.skill and msg.skill in SKILL_PROMPTS:
         skill_block = f"\n\n{SKILL_PROMPTS[msg.skill]}"
 
+    # ── User Identity Context ───────────────────────────────
+    identity_block = get_identity_context()
+
+    # ── LinkedIn Fallback for career questions with thin vault results ──
+    linkedin_block = ""
+    if use_vault and not vault_has_answer and _is_career_question(msg.message):
+        try:
+            linkedin_block = get_linkedin_context(msg.message)
+            if linkedin_block:
+                vault_has_answer = True  # We now have context from LinkedIn
+                print(f"[UserProfile] LinkedIn fallback activated for career query")
+        except Exception as e:
+            print(f"[UserProfile] LinkedIn fallback error (non-fatal): {e}")
+
     def generate():
         sections    = []
         all_sources = []
         mode        = "vault"
+
+        # ── Identity + LinkedIn context ─────────────────────────
+        if identity_block:
+            sections.append(f"USER IDENTITY:\n{identity_block}")
+        if linkedin_block:
+            sections.append(linkedin_block)
+            all_sources.append("LinkedIn Profile")
 
         # ── Vault context ───────────────────────────────────────
         if use_vault:
