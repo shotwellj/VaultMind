@@ -136,13 +136,38 @@ def check_groundedness_heuristic(response: str, context: str) -> QualityCheck:
     else:
         term_score = 1.0
 
-    score = (number_score * 0.6 + term_score * 0.4)
+    # Check for job titles, roles, and proper nouns that must match the source
+    # These are high-value claims that should NOT be hallucinated
+    role_patterns = re.compile(
+        r'\b(?:software engineer|data scientist|product manager|technical sourcer'
+        r'|senior engineer|staff engineer|recruiter|analyst|designer|director'
+        r'|vice president|manager|consultant|associate|partner|intern'
+        r'|sourcer|coordinator|specialist|administrator|architect)\b',
+        re.IGNORECASE
+    )
+    response_roles = set(m.group().lower() for m in role_patterns.finditer(response))
+    context_roles = set(m.group().lower() for m in role_patterns.finditer(context))
+    if response_roles:
+        ungrounded_roles = response_roles - context_roles
+        if ungrounded_roles:
+            # Heavy penalty: the response invented job titles not in sources
+            role_score = max(0.0, 1.0 - (len(ungrounded_roles) * 0.5))
+        else:
+            role_score = 1.0
+    else:
+        role_score = 1.0
+
+    score = (number_score * 0.4 + term_score * 0.3 + role_score * 0.3)
+
+    detail_parts = [f"Numbers: {number_score:.0%}", f"Terms: {term_score:.0%}", f"Roles: {role_score:.0%}"]
+    if response_roles - context_roles:
+        detail_parts.append(f"Ungrounded roles: {response_roles - context_roles}")
 
     return QualityCheck(
         check_type=CheckType.GROUNDEDNESS,
         score=score,
         passed=score >= 0.4,
-        detail=f"Numbers grounded: {number_score:.0%}, Terms grounded: {term_score:.0%}",
+        detail=", ".join(detail_parts),
     )
 
 

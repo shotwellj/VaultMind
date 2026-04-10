@@ -66,11 +66,13 @@ def truncate_context(context: str, model: str) -> str:
 
 # ── Base Template Parts ───────────────────────────────────────
 
-GROUNDING_RULES = """GROUNDING RULES:
-- Only state facts that appear in the provided sources.
-- If the sources do not contain enough info, say so clearly.
-- Never invent statistics, dates, names, or legal references.
-- When sources conflict, note the disagreement instead of picking one."""
+GROUNDING_RULES = """GROUNDING RULES (CRITICAL -- VIOLATING THESE IS A FAILURE):
+- ONLY state facts that appear VERBATIM in the provided sources below.
+- If the sources do not contain enough info, say "I could not find this in your documents."
+- NEVER invent or guess job titles, names, dates, numbers, or roles. Use the EXACT wording from the source.
+- NEVER fill in details from your training data. If the source says "Technical Sourcer", do NOT say "Software Engineer".
+- When sources conflict, note the disagreement instead of picking one.
+- If the source text is unclear, quote it directly rather than paraphrasing."""
 
 CITATION_RULES = """CITATION RULES:
 - Reference sources by their tags (e.g., [LOCAL: filename] or [WEB: url]).
