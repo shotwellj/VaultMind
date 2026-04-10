@@ -64,6 +64,34 @@ from proactive_intel import (
     add_topic_watch, remove_topic_watch,
     add_deadline, check_deadlines, extract_deadlines,
 )
+from rbac import (
+    create_user, authenticate, generate_token, validate_token,
+    check_permission, get_audit_log, assign_workspace,
+    get_user, list_users, update_role, Role,
+)
+from doc_compare import compare_documents, export_comparison_markdown
+from export_layer import (
+    export_chat_to_memo, export_analysis_to_report,
+    export_research_to_brief, list_templates,
+    register_webhook, fire_webhook, generate_api_key,
+)
+from vertical_kit import (
+    load_profile, get_active_profile, set_active_profile,
+    list_profiles, create_custom_profile,
+)
+from photo_pipeline import process_photo, process_queue as photo_process_queue
+from call_intel import process_transcript as ci_process_transcript, get_call_history
+from mobile_alerts import (
+    register_device as ma_register_device,
+    queue_alert_for_device, get_pending_alerts as ma_get_pending,
+    mark_delivered as ma_mark_delivered,
+    configure_preferences as ma_configure_prefs,
+)
+from contact_intel import (
+    add_contact, search_contacts, generate_briefing,
+    log_interaction, import_contacts as ci_import_contacts,
+    get_contact_history,
+)
 from lam import (
     run_lam_agent, load_staged, approve_staged_action,
     reject_staged_action, AUDIT_DIR
@@ -848,6 +876,270 @@ async def proactive_scan():
 async def proactive_summary():
     """Get proactive intelligence summary (for morning briefing)."""
     return get_proactive_summary()
+
+# ── Phase 5: RBAC Endpoints ───────────────────────────────────
+
+@app.post("/auth/register")
+async def auth_register(data: dict):
+    """Create a new user account."""
+    try:
+        user_id = create_user(
+            username=data["username"],
+            password=data["password"],
+            email=data.get("email", ""),
+            role=data.get("role", "viewer"),
+        )
+        return {"status": "created", "user_id": user_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/auth/login")
+async def auth_login(data: dict):
+    """Authenticate and get a JWT token."""
+    user = authenticate(data["username"], data["password"])
+    if user:
+        token = generate_token(user["id"], user["username"], user["role"])
+        return {"token": token, "user": user}
+    return {"error": "Invalid credentials"}
+
+@app.get("/auth/users")
+async def auth_users():
+    """List all users (admin only)."""
+    return {"users": list_users()}
+
+@app.post("/auth/role")
+async def auth_update_role(data: dict):
+    """Update a user's role."""
+    update_role(data["user_id"], data["role"])
+    return {"status": "updated"}
+
+@app.post("/auth/workspace")
+async def auth_assign_workspace(data: dict):
+    """Assign a workspace to a user."""
+    assign_workspace(data["user_id"], data["workspace"])
+    return {"status": "assigned"}
+
+@app.get("/auth/audit")
+async def auth_audit(limit: int = 100):
+    """Get access audit log."""
+    return {"entries": get_audit_log(limit=limit)}
+
+# ── Phase 5: Document Comparison Endpoints ────────────────────
+
+class CompareRequest(BaseModel):
+    text_a: str
+    text_b: str
+    label_a: str = "Document A"
+    label_b: str = "Document B"
+
+@app.post("/compare")
+async def compare_docs(req: CompareRequest):
+    """Compare two documents."""
+    result = compare_documents(req.text_a, req.text_b, req.label_a, req.label_b)
+    return result.to_dict() if hasattr(result, "to_dict") else result
+
+@app.post("/compare/markdown")
+async def compare_markdown(req: CompareRequest):
+    """Compare two documents and return markdown diff."""
+    result = compare_documents(req.text_a, req.text_b, req.label_a, req.label_b)
+    md = export_comparison_markdown(result)
+    return {"markdown": md}
+
+# ── Phase 5: Export Layer Endpoints ───────────────────────────
+
+@app.post("/export/memo")
+async def export_memo(data: dict):
+    """Export a chat to a structured memo."""
+    result = export_chat_to_memo(
+        messages=data.get("messages", []),
+        title=data.get("title", ""),
+        author=data.get("author", "VaultMind"),
+    )
+    return result
+
+@app.post("/export/report")
+async def export_report(data: dict):
+    """Export analysis to a structured report."""
+    result = export_analysis_to_report(
+        analysis=data.get("analysis", ""),
+        title=data.get("title", ""),
+        sources=data.get("sources", []),
+    )
+    return result
+
+@app.post("/export/brief")
+async def export_brief(data: dict):
+    """Export research to a brief template."""
+    result = export_research_to_brief(
+        question=data.get("question", ""),
+        answer=data.get("answer", ""),
+        sources=data.get("sources", []),
+    )
+    return result
+
+@app.get("/export/templates")
+async def export_templates():
+    """List available export templates."""
+    return {"templates": list_templates()}
+
+@app.post("/webhooks/register")
+async def webhook_register(data: dict):
+    """Register a webhook."""
+    return register_webhook(
+        url=data["url"],
+        events=data.get("events", []),
+        secret=data.get("secret", ""),
+    )
+
+@app.post("/api-keys/generate")
+async def apikey_generate(data: dict):
+    """Generate an API key."""
+    return generate_api_key(
+        label=data.get("label", "default"),
+        permissions=data.get("permissions", ["read"]),
+    )
+
+# ── Phase 5: Vertical Kit Endpoints ──────────────────────────
+
+@app.get("/verticals")
+async def verticals_list():
+    """List available vertical profiles."""
+    return {"profiles": list_profiles()}
+
+@app.get("/verticals/active")
+async def verticals_active():
+    """Get the active vertical profile."""
+    profile = get_active_profile()
+    return profile if profile else {"profile": "general"}
+
+@app.post("/verticals/activate")
+async def verticals_activate(data: dict):
+    """Set the active vertical profile."""
+    set_active_profile(data["profile"])
+    return {"status": "activated", "profile": data["profile"]}
+
+@app.post("/verticals/create")
+async def verticals_create(data: dict):
+    """Create a custom vertical profile."""
+    result = create_custom_profile(
+        name=data["name"],
+        base=data.get("base", "general"),
+        overrides=data.get("overrides", {}),
+    )
+    return result
+
+# ── Phase 6: Photo Pipeline Endpoints ─────────────────────────
+
+@app.post("/photos/process")
+async def photos_process(data: dict):
+    """Process a photo into searchable knowledge."""
+    result = process_photo(
+        image_data=data.get("image_data"),
+        filepath=data.get("filepath"),
+        filename=data.get("filename", "photo.jpg"),
+        document_type=data.get("document_type", "auto"),
+    )
+    return result
+
+@app.post("/photos/queue/process")
+async def photos_queue_process():
+    """Process all queued photos."""
+    results = photo_process_queue()
+    return {"processed": len(results), "results": results}
+
+# ── Phase 6: Call Intelligence Endpoints ──────────────────────
+
+@app.post("/calls/process")
+async def calls_process(data: dict):
+    """Process a call transcript."""
+    result = ci_process_transcript(
+        transcript_text=data.get("transcript", ""),
+        participants=data.get("participants", []),
+        workspace=data.get("workspace", ""),
+    )
+    return result
+
+@app.get("/calls/history")
+async def calls_history(limit: int = 20):
+    """Get call history."""
+    return {"calls": get_call_history(limit=limit)}
+
+# ── Phase 6: Mobile Alerts Endpoints ──────────────────────────
+
+@app.post("/mobile/register")
+async def mobile_register(data: dict):
+    """Register a mobile device for push alerts."""
+    return ma_register_device(
+        device_id=data["device_id"],
+        device_name=data.get("device_name", ""),
+        platform=data.get("platform", "unknown"),
+    )
+
+@app.get("/mobile/alerts/{device_id}")
+async def mobile_alerts(device_id: str, limit: int = 50):
+    """Get pending alerts for a device."""
+    return {"alerts": ma_get_pending(device_id, limit=limit)}
+
+@app.post("/mobile/alerts/{alert_id}/delivered")
+async def mobile_delivered(alert_id: str):
+    """Mark a mobile alert as delivered."""
+    ma_mark_delivered(alert_id)
+    return {"status": "delivered"}
+
+@app.post("/mobile/preferences")
+async def mobile_preferences(data: dict):
+    """Configure alert preferences for a device."""
+    return ma_configure_prefs(
+        device_id=data["device_id"],
+        min_priority=data.get("min_priority", "medium"),
+        quiet_start=data.get("quiet_start"),
+        quiet_end=data.get("quiet_end"),
+    )
+
+# ── Phase 6: Contact Intelligence Endpoints ───────────────────
+
+@app.post("/contacts")
+async def contacts_add(data: dict):
+    """Add a contact."""
+    return add_contact(
+        name=data["name"],
+        phone=data.get("phone", ""),
+        email=data.get("email", ""),
+        company=data.get("company", ""),
+        role=data.get("role", ""),
+        tags=data.get("tags", []),
+        workspaces=data.get("workspaces", []),
+    )
+
+@app.get("/contacts/search")
+async def contacts_search(q: str = Query(...)):
+    """Search contacts."""
+    results = search_contacts(q)
+    return {"contacts": results}
+
+@app.get("/contacts/{contact_id}/briefing")
+async def contacts_briefing(contact_id: str):
+    """Generate a pre-call briefing for a contact."""
+    return generate_briefing(contact_id)
+
+@app.post("/contacts/{contact_id}/interaction")
+async def contacts_interaction(contact_id: str, data: dict):
+    """Log an interaction with a contact."""
+    return log_interaction(
+        contact_id=contact_id,
+        interaction_type=data.get("type", "note"),
+        summary=data.get("summary", ""),
+    )
+
+@app.post("/contacts/import")
+async def contacts_import(data: dict):
+    """Import contacts from JSON."""
+    return ci_import_contacts(data.get("contacts", []))
+
+@app.get("/contacts/{contact_id}/history")
+async def contacts_history(contact_id: str, limit: int = 20):
+    """Get interaction history for a contact."""
+    return {"history": get_contact_history(contact_id, limit=limit)}
 
 @app.get("/models")
 async def list_models():

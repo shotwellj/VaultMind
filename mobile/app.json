@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "VaultMind",
+    "slug": "vaultmind-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0a0e17"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vaultmind.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "VaultMind uses the camera to scan documents into your knowledge base",
+        "NSMicrophoneUsageDescription": "VaultMind uses the microphone for voice queries and call transcription",
+        "NSContactsUsageDescription": "VaultMind maps your contacts to your knowledge base for pre-call briefings"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0e17"
+      },
+      "package": "com.vaultmind.mobile",
+      "permissions": ["CAMERA", "RECORD_AUDIO", "READ_CONTACTS"]
+    }
+  }
+}
