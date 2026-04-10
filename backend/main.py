@@ -38,6 +38,9 @@ from privacy_firewall import sanitize_for_search as firewall_sanitize, load_conf
 from search_proxy import privacy_search, load_search_config
 from context_fusion import fuse_contexts, build_fusion_prompt, FusedContext
 from search_quality import classify_domain
+from quality_gate import run_quality_gate, ConfidenceLevel
+from citation_engine import cite_response, format_sources_for_frontend
+from adaptive_prompts import build_adaptive_prompt, get_retry_prompt, truncate_context
 from lam import (
     run_lam_agent, load_staged, approve_staged_action,
     reject_staged_action, AUDIT_DIR
@@ -587,6 +590,42 @@ async def scan_data_leakage(data: dict):
     if not text:
         return {"error": "No text provided"}
     return scan_for_data_leakage(text, context)
+
+# ── Phase 3: Quality Gate + Citation API Endpoints ────────────
+
+class QualityCheckRequest(BaseModel):
+    response: str
+    question: str
+    context: str = ""
+    local_context: str = ""
+    web_context: str = ""
+    sources: list = []
+    use_llm: bool = False
+
+@app.post("/quality/check")
+async def quality_check(req: QualityCheckRequest):
+    """Run the quality gate on any response (for testing or external use)."""
+    verdict = run_quality_gate(
+        response=req.response,
+        question=req.question,
+        context=req.context,
+        local_context=req.local_context,
+        web_context=req.web_context,
+        sources=req.sources,
+        use_llm=req.use_llm,
+    )
+    return verdict.to_dict()
+
+class CitationRequest(BaseModel):
+    response: str
+    local_chunks: list = []
+    web_results: list = []
+
+@app.post("/citations/generate")
+async def generate_citations(req: CitationRequest):
+    """Generate citations for any response (for testing or external use)."""
+    cited = cite_response(req.response, req.local_chunks, req.web_results)
+    return format_sources_for_frontend(cited)
 
 @app.get("/models")
 async def list_models():
@@ -2256,19 +2295,18 @@ async def chat(msg: ChatMessage):
                 f"{skill_block}"
             )
         else:
-            # Use intent-aware prompt template from Query Intelligence Engine
+            # Phase 3: Use adaptive prompt templates (replaces basic Phase 1 templates)
             context_block = '---'.join(sections)
-            intent_prompt = build_prompt(classification, msg.message, context_block)
-            # Wrap with vault-specific guardrails
-            system_prompt = (
-                "You are VaultMind, a personal AI assistant. You have access ONLY to documents the user has explicitly indexed.\n\n"
-                "STRICT RULES:\n"
-                "1. NEVER invent, fabricate, or guess information.\n"
-                "2. ONLY use information literally present in the documents below.\n"
-                "3. If the answer isn't in the documents, say so clearly.\n\n"
-                f"{intent_prompt}"
-                f"{skill_block}"
+            intent_name = classification.intent.value  # "research", "draft", etc.
+            system_prompt = build_adaptive_prompt(
+                question=msg.message,
+                intent=intent_name,
+                context=context_block,
+                memory_context=memory_context,
+                model=chat_model,
+                style="standard",
             )
+            system_prompt += skill_block
 
         # Inject conversation memory if available
         if memory_context:
@@ -2279,11 +2317,111 @@ async def chat(msg: ChatMessage):
             messages.append(h)
         messages.append({"role": "user", "content": msg.message})
 
+        # ── Stream the LLM response and collect it ──────────────
+        full_response = ""
         stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
         for chunk in stream:
             token = chunk["message"]["content"]
             if token:
+                full_response += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
+
+        # ── Phase 3: Quality Gate ──────────────────────────────
+        local_ctx = ""
+        web_ctx = ""
+        for s in sections:
+            if s.startswith("FROM YOUR PRIVATE DOCUMENTS"):
+                local_ctx = s
+            elif s.startswith("FROM THE WEB"):
+                web_ctx = s
+
+        try:
+            verdict = run_quality_gate(
+                response=full_response,
+                question=msg.message,
+                context="\n".join(sections),
+                local_context=local_ctx,
+                web_context=web_ctx,
+                sources=all_sources,
+                use_llm=False,  # Heuristic only for speed
+            )
+            quality_data = verdict.to_dict()
+            yield f"data: {json.dumps({'quality': quality_data})}\n\n"
+            print(f"[QualityGate] {verdict.badge_text} (score: {verdict.confidence_score:.2f})")
+
+            # If LOW confidence and we have context, retry with strict prompt
+            if verdict.confidence == ConfidenceLevel.LOW and "\n".join(sections).strip():
+                yield f"data: {json.dumps({'status': 'Quality check flagged low confidence. Retrying with stricter prompt...'})}\n\n"
+                intent_name_retry = classification.intent.value
+                strict_prompt = get_retry_prompt(
+                    question=msg.message,
+                    intent=intent_name_retry,
+                    context="\n".join(sections),
+                    quality_verdict=quality_data,
+                    model=chat_model,
+                )
+                retry_messages = [
+                    {"role": "system", "content": strict_prompt},
+                    {"role": "user", "content": msg.message},
+                ]
+                yield f"data: {json.dumps({'retry_start': True})}\n\n"
+                full_response = ""
+                retry_stream = ollama.chat(model=chat_model, messages=retry_messages, stream=True, options={"temperature": 0})
+                for chunk in retry_stream:
+                    token = chunk["message"]["content"]
+                    if token:
+                        full_response += token
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                # Re-run quality gate on retry
+                retry_verdict = run_quality_gate(
+                    response=full_response,
+                    question=msg.message,
+                    context="\n".join(sections),
+                    local_context=local_ctx,
+                    web_context=web_ctx,
+                    sources=all_sources,
+                    use_llm=False,
+                )
+                quality_data = retry_verdict.to_dict()
+                yield f"data: {json.dumps({'quality': quality_data})}\n\n"
+                print(f"[QualityGate] Retry: {retry_verdict.badge_text} (score: {retry_verdict.confidence_score:.2f})")
+
+        except Exception as e:
+            print(f"[QualityGate] Error (non-fatal): {e}")
+            quality_data = {}
+
+        # ── Phase 3: Citation Engine ───────────────────────────
+        try:
+            # Build source objects for citation matching
+            local_chunks = []
+            web_results = []
+            if use_vault and relevant_docs:
+                for d, m in relevant_docs:
+                    local_chunks.append({
+                        "text": d,
+                        "source": m.get("source", "Unknown"),
+                        "section_header": m.get("section", ""),
+                    })
+            if use_web and web_ctx:
+                for src_label in all_sources:
+                    # Parse markdown link format: [title](url)
+                    link_match = re.match(r'\[(.+?)\]\((.+?)\)', src_label)
+                    if link_match:
+                        web_results.append({
+                            "title": link_match.group(1),
+                            "url": link_match.group(2),
+                            "snippet": "",
+                            "trust_tier": "tier2",
+                        })
+
+            if local_chunks or web_results:
+                cited = cite_response(full_response, local_chunks, web_results)
+                citation_data = format_sources_for_frontend(cited)
+                yield f"data: {json.dumps({'citations': citation_data})}\n\n"
+                print(f"[CitationEngine] {cited.citation_count} citations, {cited.uncited_claims} uncited claims")
+        except Exception as e:
+            print(f"[CitationEngine] Error (non-fatal): {e}")
+
         yield f"data: {json.dumps({'done': True, 'sources': all_sources})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream",
