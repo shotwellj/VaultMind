@@ -2146,16 +2146,20 @@ def _extract_urls(text: str) -> list[str]:
     return _URL_RE.findall(text)
 
 # Keywords that signal the user wants real web results, not doc search
+# These must be EXPLICIT web intent -- not words that could appear in vault queries
 _WEB_INTENT_PATTERNS = [
     r"\bfind\b.*\b(companies|jobs|hiring|openings|positions|listings)\b",
-    r"\bsearch\b.*\b(for|the web|online|google)\b",
-    r"\b(latest|recent|current|today|news|trending)\b",
+    r"\bsearch\b.*\b(the web|online|google)\b",
+    r"\b(trending|breaking news)\b",
     r"\bpull\b.*\b(links|urls|recs|listings|results)\b",
     r"\b(who is hiring|companies hiring|jobs in|openings in|hiring in)\b",
-    r"\b(give me|show me|list)\b.*\b(companies|jobs|urls|links|websites|results)\b",
+    r"\b(give me|show me|list)\b.*\b(urls|links|websites)\b",
     r"\breal urls?\b",
-    r"\b(top \d+|best \d+|find \d+|list \d+)\b",
     r"\b(salary|compensation|pay range|glassdoor)\b.*\b(for|at|in)\b",
+    r"\bweb search\b",
+    r"\bsearch the internet\b",
+    r"\blook up online\b",
+    r"\bgoogle\b",
     r"https?://",  # If user pastes a URL, always do web mode
 ]
 _WEB_INTENT_RE = _re.compile("|".join(_WEB_INTENT_PATTERNS), _re.IGNORECASE)
@@ -2541,14 +2545,14 @@ async def chat(msg: ChatMessage):
 
         if has_user_urls:
             use_web = True; use_vault = False
-        elif msg.mode == "vault" or (not is_agent_mode and not wants_web):
-            use_web = False; use_vault = True
-        elif is_agent_mode:
+        elif is_agent_mode and wants_web:
             use_web = True; use_vault = vault_has_answer
+        elif wants_web and not vault_has_answer:
+            # Only go to web if user explicitly asked AND vault has nothing
+            use_web = True; use_vault = False
         else:
-            use_web = wants_web or not vault_has_answer
-            use_vault = vault_has_answer
-            if wants_web: use_vault = False
+            # DEFAULT: always use vault, never fall back to web silently
+            use_web = False; use_vault = True
 
     skill_block = ""
     if msg.skill == "__custom__" and msg.custom_prompt:
