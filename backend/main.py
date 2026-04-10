@@ -2545,11 +2545,15 @@ async def chat(msg: ChatMessage):
 
         if has_user_urls:
             use_web = True; use_vault = False
-        elif is_agent_mode and wants_web:
+        elif is_agent_mode:
+            # Agent mode = user explicitly chose web search
             use_web = True; use_vault = vault_has_answer
         elif wants_web and not vault_has_answer:
             # Only go to web if user explicitly asked AND vault has nothing
             use_web = True; use_vault = False
+        elif wants_web and vault_has_answer:
+            # User wants web but vault also has docs -- use both
+            use_web = True; use_vault = True
         else:
             # DEFAULT: always use vault, never fall back to web silently
             use_web = False; use_vault = True
