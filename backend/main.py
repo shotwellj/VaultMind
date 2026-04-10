@@ -41,6 +41,29 @@ from search_quality import classify_domain
 from quality_gate import run_quality_gate, ConfidenceLevel
 from citation_engine import cite_response, format_sources_for_frontend
 from adaptive_prompts import build_adaptive_prompt, get_retry_prompt, truncate_context
+from feedback_loop import (
+    store_feedback, FeedbackEntry, get_feedback_summary,
+    get_route_stats, get_best_route, get_routing_overrides,
+    get_insights, export_training_jsonl,
+)
+from knowledge_graph import (
+    load_graph, save_graph, add_document_to_graph,
+    find_related, get_document_connections, get_graph_stats,
+    build_context_from_graph, rebuild_graph as kg_rebuild,
+)
+from finetune_pipeline import (
+    check_readiness as ft_check_readiness,
+    get_status as ft_get_status,
+    run_training as ft_run_training,
+    get_training_history as ft_get_history,
+)
+from proactive_intel import (
+    run_proactive_scan, get_proactive_summary,
+    get_alerts, get_unread_count, mark_read, dismiss_alert, mark_all_read,
+    add_folder_watch, remove_folder_watch, get_watches,
+    add_topic_watch, remove_topic_watch,
+    add_deadline, check_deadlines, extract_deadlines,
+)
 from lam import (
     run_lam_agent, load_staged, approve_staged_action,
     reject_staged_action, AUDIT_DIR
@@ -627,6 +650,205 @@ async def generate_citations(req: CitationRequest):
     cited = cite_response(req.response, req.local_chunks, req.web_results)
     return format_sources_for_frontend(cited)
 
+# ── Phase 4: Feedback Loop Endpoints ──────────────────────────
+
+class FeedbackRequest(BaseModel):
+    question: str
+    response: str
+    rating: int  # 1 = thumbs up, -1 = thumbs down
+    conversation_id: str = ""
+    intent: str = ""
+    complexity: str = ""
+    model: str = ""
+    prompt_template: str = ""
+    quality_score: float = 0.0
+    quality_confidence: str = ""
+    mode: str = ""
+    sources_used: int = 0
+    user_comment: str = ""
+
+@app.post("/feedback")
+async def submit_feedback(req: FeedbackRequest):
+    """Store user feedback on a response."""
+    entry = FeedbackEntry(
+        question=req.question, response=req.response, rating=req.rating,
+        conversation_id=req.conversation_id, intent=req.intent,
+        complexity=req.complexity, model=req.model,
+        prompt_template=req.prompt_template, quality_score=req.quality_score,
+        quality_confidence=req.quality_confidence, mode=req.mode,
+        sources_used=req.sources_used, user_comment=req.user_comment,
+    )
+    feedback_id = store_feedback(entry)
+    return {"status": "stored", "feedback_id": feedback_id}
+
+@app.get("/feedback/summary")
+async def feedback_summary(days: int = 30):
+    """Get feedback summary for the last N days."""
+    return get_feedback_summary(days=days)
+
+@app.get("/feedback/routes")
+async def feedback_routes():
+    """Get route performance stats."""
+    stats = get_route_stats(min_ratings=3)
+    return {"routes": [{"intent": s.intent, "model": s.model, "template": s.template,
+                         "total": s.total, "positive": s.positive, "negative": s.negative,
+                         "success_rate": s.success_rate, "avg_quality": s.avg_quality}
+                        for s in stats]}
+
+@app.get("/feedback/overrides")
+async def feedback_overrides():
+    """Get routing override recommendations based on feedback."""
+    return get_routing_overrides()
+
+@app.get("/feedback/insights")
+async def feedback_insights():
+    """Get learning insights from feedback data."""
+    return {"insights": get_insights()}
+
+@app.get("/feedback/export")
+async def feedback_export():
+    """Export training data as JSONL."""
+    path = export_training_jsonl()
+    return FileResponse(path, media_type="application/jsonl", filename="training_data.jsonl")
+
+# ── Phase 4: Knowledge Graph Endpoints ────────────────────────
+
+@app.get("/graph/stats")
+async def graph_stats():
+    """Get knowledge graph statistics."""
+    kg = load_graph()
+    return get_graph_stats(kg)
+
+@app.get("/graph/related")
+async def graph_related(q: str = Query(...), hops: int = 2, limit: int = 10):
+    """Find entities related to a query."""
+    kg = load_graph()
+    results = find_related(kg, q, max_hops=hops, max_results=limit)
+    return {"query": q, "related": results}
+
+@app.get("/graph/document/{source}")
+async def graph_document(source: str):
+    """Get all entities connected to a document."""
+    kg = load_graph()
+    connections = get_document_connections(kg, source)
+    return {"source": source, "connections": connections}
+
+@app.post("/graph/rebuild")
+async def graph_rebuild():
+    """Rebuild the entire knowledge graph from ChromaDB."""
+    col = get_collection()
+    all_data = col.get(include=["documents", "metadatas"])
+    docs = []
+    for doc, meta in zip(all_data["documents"], all_data["metadatas"]):
+        docs.append({
+            "source": meta.get("source", "unknown"),
+            "text": doc,
+            "metadata": meta,
+        })
+    kg = kg_rebuild(docs)
+    stats = get_graph_stats(kg)
+    return {"status": "rebuilt", "stats": stats}
+
+# ── Phase 4: Fine-Tuning Pipeline Endpoints ──────────────────
+
+@app.get("/finetune/readiness")
+async def finetune_readiness():
+    """Check if the system is ready for fine-tuning."""
+    return ft_check_readiness()
+
+@app.get("/finetune/status")
+async def finetune_status():
+    """Get current fine-tuning pipeline status."""
+    return ft_get_status()
+
+@app.post("/finetune/train")
+async def finetune_train(data: dict = {}):
+    """Start a fine-tuning run (long-running, blocking)."""
+    result = ft_run_training(
+        epochs=data.get("epochs", 3),
+        batch_size=data.get("batch_size", 2),
+        learning_rate=data.get("learning_rate", 2e-4),
+    )
+    return result
+
+@app.get("/finetune/history")
+async def finetune_history():
+    """Get training run history."""
+    return {"history": ft_get_history()}
+
+# ── Phase 4: Proactive Intelligence Endpoints ─────────────────
+
+@app.get("/proactive/alerts")
+async def proactive_alerts(include_dismissed: bool = False, limit: int = 50):
+    """Get active alerts."""
+    return {"alerts": get_alerts(include_dismissed=include_dismissed, limit=limit)}
+
+@app.get("/proactive/unread")
+async def proactive_unread():
+    """Get unread alert count."""
+    return {"unread": get_unread_count()}
+
+@app.post("/proactive/alerts/{alert_id}/read")
+async def proactive_mark_read(alert_id: str):
+    """Mark an alert as read."""
+    mark_read(alert_id)
+    return {"status": "read"}
+
+@app.post("/proactive/alerts/{alert_id}/dismiss")
+async def proactive_dismiss(alert_id: str):
+    """Dismiss an alert."""
+    dismiss_alert(alert_id)
+    return {"status": "dismissed"}
+
+@app.post("/proactive/alerts/read-all")
+async def proactive_read_all():
+    """Mark all alerts as read."""
+    mark_all_read()
+    return {"status": "all_read"}
+
+@app.get("/proactive/watches")
+async def proactive_watches():
+    """Get all active watches."""
+    return get_watches()
+
+@app.post("/proactive/watch/folder")
+async def proactive_watch_folder(data: dict):
+    """Add a folder to watch."""
+    return add_folder_watch(data.get("path", ""), data.get("label", ""))
+
+@app.delete("/proactive/watch/folder")
+async def proactive_unwatch_folder(data: dict):
+    """Remove a folder watch."""
+    return remove_folder_watch(data.get("path", ""))
+
+@app.post("/proactive/watch/topic")
+async def proactive_watch_topic(data: dict):
+    """Add a topic to watch."""
+    return add_topic_watch(
+        data.get("topic", ""),
+        data.get("search_query", ""),
+        data.get("interval_hours", 24),
+    )
+
+@app.post("/proactive/deadline")
+async def proactive_add_deadline(data: dict):
+    """Add a deadline to track."""
+    return add_deadline(
+        data.get("title", ""),
+        data.get("date", ""),
+        data.get("source", ""),
+    )
+
+@app.post("/proactive/scan")
+async def proactive_scan():
+    """Run a proactive intelligence scan now."""
+    return run_proactive_scan()
+
+@app.get("/proactive/summary")
+async def proactive_summary():
+    """Get proactive intelligence summary (for morning briefing)."""
+    return get_proactive_summary()
+
 @app.get("/models")
 async def list_models():
     try:
@@ -765,6 +987,18 @@ def embed_and_store(chunks, source: str, col):
         )
         if i % 10 == 0:
             print(f"  ✓ {i}/{len(chunks)}")
+
+    # Phase 4: Add document to knowledge graph (non-blocking)
+    try:
+        kg = load_graph()
+        if kg is not None:
+            full_text = " ".join(
+                c["text"] if isinstance(c, dict) else c for c in chunks
+            )
+            add_document_to_graph(kg, source, full_text)
+            save_graph(kg)
+    except Exception as e:
+        print(f"[KnowledgeGraph] Failed to update graph (non-fatal): {e}")
 
 # ── Photo Intelligence ────────────────────────────────────────
 
@@ -1918,8 +2152,20 @@ async def chat(msg: ChatMessage):
     print(f"[QueryIntel] Intent={classification.intent.value} Model={classification.recommended_model} Template={classification.prompt_template}")
 
     # Use the query intelligence model recommendation if the user didn't pick one
+    # Phase 4: Check if feedback data suggests a better route
+    feedback_override = None
+    try:
+        feedback_override = get_best_route(classification.intent.value, min_ratings=5)
+        if feedback_override:
+            print(f"[FeedbackLoop] Override available: {feedback_override['model']} ({feedback_override['success_rate']:.0%} success rate)")
+    except Exception:
+        pass
+
     if msg.model and msg.model != "mistral":
         chat_model = msg.model  # user explicitly chose a model, respect it
+    elif feedback_override and feedback_override.get("success_rate", 0) > 0.7:
+        chat_model = feedback_override["model"]  # feedback-learned best route
+        print(f"[FeedbackLoop] Using learned route: {chat_model}")
     elif classification.recommended_model:
         chat_model = classification.recommended_model
     else:
@@ -1938,6 +2184,17 @@ async def chat(msg: ChatMessage):
             print(f"[ConversationMemory] Recalled {len(memories)} relevant past conversations")
     except Exception as e:
         print(f"[ConversationMemory] Recall failed (non-fatal): {e}")
+
+    # ── Step 0.7: Knowledge Graph context ────────────────────────
+    graph_context = ""
+    try:
+        kg = load_graph()
+        if kg is not None and kg.number_of_nodes() > 0:
+            graph_context = build_context_from_graph(kg, msg.message, max_entities=5)
+            if graph_context:
+                print(f"[KnowledgeGraph] Found related entities for query")
+    except Exception as e:
+        print(f"[KnowledgeGraph] Lookup failed (non-fatal): {e}")
 
     # ── Step 1: Try vault retrieval ─────────────────────────────
     if msg.pinned_source:
@@ -2311,6 +2568,10 @@ async def chat(msg: ChatMessage):
         # Inject conversation memory if available
         if memory_context:
             system_prompt += f"\n\n{memory_context}"
+
+        # Inject knowledge graph context if available
+        if graph_context:
+            system_prompt += f"\n\n{graph_context}"
 
         messages = [{"role": "system", "content": system_prompt}]
         for h in msg.history[-6:]:
