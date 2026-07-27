@@ -10,7 +10,6 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.json">
 <title>VaultMind</title>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 /* ── CSS Variables ── */
 :root {
@@ -596,6 +595,74 @@ if (!window.VAULTMIND_TOKEN) {
   );
 }
 
+// ── Safe rendering ─────────────────────────────────────────────
+// Model output is built from indexed documents and, in agent mode, from
+// scraped web pages. Treat all of it as hostile: a page that ranks for
+// the user's query can otherwise get HTML into this DOM, and from there
+// read the vault and beacon it out.
+//
+// Everything is HTML-escaped first, then a fixed set of markdown patterns
+// is applied to the escaped text — so there is no path by which markup in
+// the source survives into the output.
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeHref(url) {
+  // Blocks javascript:, data:, vbscript: and friends.
+  return /^(https?:|mailto:)/i.test(String(url || '').trim()) ? url : '#';
+}
+
+function renderMarkdown(src) {
+  // Sentinel for extracted code blocks. Uses a private-use codepoint that
+  // will not occur in real text, and any stray copies in the input are
+  // stripped first so model output cannot forge a placeholder.
+  const SENT = '';
+  const blocks = [];
+
+  let text = String(src == null ? '' : src).split(SENT).join('');
+
+  // Pull fenced code out first so its contents are never pattern-matched.
+  text = text.replace(/```([\s\S]*?)```/g, (_, code) => {
+    blocks.push('<pre><code>' + escapeHtml(code.replace(/^\w*\n/, '')) + '</code></pre>');
+    return SENT + (blocks.length - 1) + SENT;
+  });
+
+  text = escapeHtml(text);
+
+  text = text
+    .replace(/`([^`\n]+)`/g, (_, c) => '<code>' + c + '</code>')
+    .replace(/^###\s+(.*)$/gm, '<h3>$1</h3>')
+    .replace(/^##\s+(.*)$/gm, '<h2>$1</h2>')
+    .replace(/^#\s+(.*)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    // Label and href are already escaped; safeHref vets the scheme.
+    .replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g,
+      (_, label, href) => '<a href="' + escapeHtml(safeHref(href)) +
+                          '" target="_blank" rel="noopener noreferrer">' + label + '</a>')
+    .replace(/^\s*[-*]\s+(.*)$/gm, '<li>$1</li>')
+    .replace(/^\s*\d+\.\s+(.*)$/gm, '<li>$1</li>');
+
+  text = text.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>');
+  text = text.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>');
+  // Newlines between list items became <br>; drop those so lists render clean.
+  text = text.replace(/<\/li><br>\s*<li>/g, '</li><li>')
+             .replace(/<br>\s*<\/?ul>/g, m => m.replace('<br>', ''));
+  text = '<p>' + text + '</p>';
+
+  return text.replace(
+    new RegExp(SENT + '(\\d+)' + SENT, 'g'),
+    (_, i) => blocks[Number(i)] || ''
+  );
+}
+
 // ── State ──────────────────────────────────────────────────────
 let currentModel  = 'mistral';
 let currentSkill  = '';
@@ -1014,7 +1081,10 @@ function addFileCard(name, chunks, title) {
   const label=friendlyName(name,title);
   const el=document.createElement('div');
   el.className='file-card';el.id=safeId;
-  el.innerHTML=`<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${name}">${label}</div><div class="card-meta">${chunks} chunks</div></div><button class="card-pin" title="Focus chat on this file" onclick="togglePin('${encodeURIComponent(name)}',this)">📌</button><button class="card-del" onclick="deleteFile('${encodeURIComponent(name)}','${safeId}','${section}')">×</button>`;
+  // A filename containing a quote would otherwise break out of these
+  // attributes — and filenames come from scraped page titles and email
+  // subjects, not just from files the user picked.
+  el.innerHTML=`<div class="card-icon">${fileIcon(name)}</div><div class="card-info"><div class="card-name" title="${escapeHtml(name)}">${escapeHtml(label)}</div><div class="card-meta">${escapeHtml(chunks)} chunks</div></div><button class="card-pin" title="Focus chat on this file" onclick="togglePin('${escapeHtml(encodeURIComponent(name))}',this)">📌</button><button class="card-del" onclick="deleteFile('${escapeHtml(encodeURIComponent(name))}','${escapeHtml(safeId)}','${escapeHtml(section)}')">×</button>`;
   listEl.appendChild(el);
 }
 
@@ -1051,7 +1121,7 @@ async function summarizeInbox() {
     while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
       const lines=buf.split('\n');buf=lines.pop()||'';
       for(const line of lines){if(!line.startsWith('data: '))continue;try{const data=JSON.parse(line.slice(6));
-        if(data.token){fullText+=data.token;bubble.innerHTML=(typeof marked!=='undefined'?marked.parse(fullText):fullText);bubble.appendChild(cursor);msgsEl.scrollTop=msgsEl.scrollHeight;}
+        if(data.token){fullText+=data.token;bubble.innerHTML=renderMarkdown(fullText);bubble.appendChild(cursor);msgsEl.scrollTop=msgsEl.scrollHeight;}
         if(data.done){cursor.remove();const s=document.createElement('div');s.className='src';s.textContent=`Digest from ${data.sources?.length||0} emails`;botEl.appendChild(s);}
       }catch{}}
     }
@@ -1166,14 +1236,14 @@ async function ask() {
           if(data.token){
             if(statusEl){statusEl.remove();statusEl=null;}
             fullText+=data.token;
-            bubble.innerHTML=(typeof marked!=='undefined'?marked.parse(fullText):fullText);
+            bubble.innerHTML=renderMarkdown(fullText);
             bubble.appendChild(cursor);
             msgsEl.scrollTop=msgsEl.scrollHeight;
           }
           if(data.done){
             cursor.remove();
             // Re-render final markdown without cursor
-            bubble.innerHTML=(typeof marked!=='undefined'?marked.parse(fullText):fullText);
+            bubble.innerHTML=renderMarkdown(fullText);
             if(data.sources?.length){
               const s=document.createElement('div');s.className='src';
               const unique=[...new Set(data.sources)];
@@ -1278,7 +1348,7 @@ async function loadConversation(id) {
       } else if (m.role === 'assistant') {
         const botEl = document.createElement('div'); botEl.className = 'msg-bot';
         const bubble = document.createElement('div'); bubble.className = 'bubble';
-        bubble.innerHTML = (typeof marked !== 'undefined' ? marked.parse(m.content) : m.content);
+        bubble.innerHTML = renderMarkdown(m.content);
         botEl.appendChild(bubble); msgsEl.appendChild(botEl);
         history.push({ role: 'assistant', content: m.content });
       }
