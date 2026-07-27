@@ -43,21 +43,27 @@ Subtraction and honesty. No new features.
       distance metric and the collection used another. Fixed, with tests.
       Written up in [docs/posts/silent-rag-failure.md](posts/silent-rag-failure.md).
 
-## Now — v1.2: MCP server
+## v1.2: MCP server — complete
 
 Use your private vault as context inside Claude Desktop, Claude Code, or
 Cursor, without uploading your documents anywhere.
 
-- [ ] `vault_search`, `vault_get_document`, `vault_list_sources` over stdio
-- [ ] One-line install and a copy-paste config block
-- [ ] A log of exactly which passages were shared, per query
+- [x] `vault_search`, `vault_list_sources`, `vault_get_document` over stdio
+- [x] Copy-paste config block; installs with `uvx vaultmind-mcp`
+- [x] Every passage handed to a client is logged, visible in the privacy
+      panel and at `/mcp/disclosures`
+
+The server is a thin shim that calls the local backend rather than reading
+ChromaDB directly. Slightly slower, but retrieval logic stays in one place
+and nothing can be retrieved without being recorded — a version that read
+the vector store directly would have made the disclosure log a lie.
 
 **To be precise about the claim:** your documents stay on your machine, but
 passages returned to a cloud model *do* reach that model. The difference from
 uploading your files is that you choose what leaves, one question at a time,
 and you can see what it was.
 
-## Then — v1.3: First run
+## Now — v1.3: First run
 
 Local AI apps die at install.
 

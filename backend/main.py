@@ -3198,6 +3198,133 @@ async def health():
     except Exception:
         return {"ollama": False, "embed_model": False, "chat_model": False, "ready": False, "version": VAULTMIND_VERSION}
 
+# ── MCP surface ───────────────────────────────────────────────
+# Retrieval for connected AI clients (Claude Desktop, Claude Code, Cursor)
+# via the stdio server in mcp/. Deliberately server-side rather than having
+# the MCP process talk to Chroma directly: retrieval logic stays in one
+# place, and every passage handed out is recorded in the privacy panel.
+#
+# These return excerpts, never whole documents. A cloud client sends what
+# it receives to its model, so the amount returned is the blast radius.
+
+MCP_EXCERPT_CHARS = 1200
+MCP_MAX_RESULTS = 10
+
+
+class McpSearch(BaseModel):
+    query: str
+    limit: int = 5
+
+
+@app.post("/mcp/search")
+async def mcp_search(req: McpSearch):
+    """Search the vault and return citation-bearing excerpts."""
+    query = (req.query or "").strip()
+    if not query:
+        return {"results": [], "error": "Empty query."}
+
+    limit = max(1, min(int(req.limit or 5), MCP_MAX_RESULTS))
+    col = get_collection()
+
+    try:
+        embedding = await asyncio.to_thread(
+            lambda: ollama.embeddings(model=EMBED_MODEL, prompt=query)["embedding"]
+        )
+    except Exception as e:
+        return {"results": [], "error": f"Could not embed query — is Ollama running? ({e})"}
+
+    hits = col.query(
+        query_embeddings=[embedding],
+        n_results=limit,
+        include=["documents", "metadatas", "distances"],
+    )
+    if not hits["documents"] or not hits["documents"][0]:
+        return {"results": [], "searched": query}
+
+    results = []
+    for doc, meta, dist in zip(hits["documents"][0], hits["metadatas"][0],
+                              hits["distances"][0]):
+        if dist >= RELEVANCE_THRESHOLD_FALLBACK:
+            continue
+        results.append({
+            "source": meta.get("source", "unknown"),
+            "section": meta.get("section", ""),
+            "excerpt": doc[:MCP_EXCERPT_CHARS],
+            "relevance": round(1.0 - min(dist, 1.0), 3),
+        })
+
+    egress_log.disclose(
+        tool="vault_search",
+        query=query,
+        sources=[r["source"] for r in results],
+        characters=sum(len(r["excerpt"]) for r in results),
+    )
+    return {"results": results, "searched": query}
+
+
+@app.get("/mcp/sources")
+async def mcp_sources():
+    """List indexed sources. Names only — no document content."""
+    col = get_collection()
+    counts: dict[str, int] = {}
+    for meta in col.get(include=["metadatas"])["metadatas"]:
+        src = meta.get("source", "unknown")
+        counts[src] = counts.get(src, 0) + 1
+    return {
+        "sources": [
+            {"source": s, "chunks": c}
+            for s, c in sorted(counts.items(), key=lambda kv: -kv[1])
+        ],
+        "total": len(counts),
+    }
+
+
+class McpDocument(BaseModel):
+    source: str
+    max_chars: int = 6000
+
+
+@app.post("/mcp/document")
+async def mcp_document(req: McpDocument):
+    """Return more of one document, still capped.
+
+    Exists because search often finds the right document but not enough of
+    it. Capped because an uncapped version would let a client pull an
+    entire vault one file at a time.
+    """
+    col = get_collection()
+    got = col.get(where={"source": req.source}, include=["documents", "metadatas"])
+    if not got["documents"]:
+        return {"source": req.source, "text": "", "error": "No such source in the vault."}
+
+    cap = max(500, min(int(req.max_chars or 6000), 20000))
+    text = "\n\n".join(got["documents"])
+    truncated = len(text) > cap
+    text = text[:cap]
+
+    egress_log.disclose(
+        tool="vault_get_document",
+        query=f"full text of {req.source}",
+        sources=[req.source],
+        characters=len(text),
+    )
+    return {
+        "source": req.source,
+        "text": text,
+        "truncated": truncated,
+        "total_chunks": len(got["documents"]),
+    }
+
+
+@app.get("/mcp/disclosures")
+async def mcp_disclosures(limit: int = Query(default=50, le=200)):
+    """What has been handed to connected AI clients this session."""
+    return {
+        "summary": egress_log.disclosure_summary(),
+        "disclosures": egress_log.recent_disclosures(limit),
+    }
+
+
 # ── Query (non-streaming) ─────────────────────────────────────
 
 class QueryMessage(BaseModel):

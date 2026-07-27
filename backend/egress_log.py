@@ -56,8 +56,17 @@ from datetime import datetime, timezone
 from functools import wraps
 
 MAX_EVENTS = 500
+MAX_DISCLOSURES = 200
 
 _events: deque = deque(maxlen=MAX_EVENTS)
+
+# Passages handed to a connected AI client (currently the MCP server).
+# Tracked separately from connections because the mechanism is different:
+# this process does not make the outbound request — it hands text to a
+# client, which then sends it wherever that client sends things. No socket
+# monitor can see that, so the only honest record is what we handed over.
+_disclosures: deque = deque(maxlen=MAX_DISCLOSURES)
+
 _lock = threading.Lock()
 _local = threading.local()
 _installed = False
@@ -126,6 +135,54 @@ def _record(host: str, port: int) -> None:
     }
     with _lock:
         _events.append(event)
+
+
+def disclose(tool: str, query: str, sources: list, characters: int,
+             client: str = "MCP client") -> None:
+    """Record vault text handed to a connected AI client.
+
+    When Claude (or Cursor, or any MCP client) retrieves from the vault,
+    the passages returned go wherever that client sends them — for a cloud
+    model, that means off this machine. VaultMind does not make that
+    request and cannot observe it, so this records the one thing that is
+    knowable: exactly what was handed over, and in answer to what.
+
+    This is the difference between MCP and uploading your files. The corpus
+    stays here; specific passages leave, one question at a time, and this
+    is the log of which.
+    """
+    with _lock:
+        _disclosures.append({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "tool": tool,
+            "query": (query or "")[:300],
+            "sources": list(sources)[:20],
+            "characters": int(characters),
+            "client": client,
+        })
+
+
+def disclosure_summary() -> dict:
+    with _lock:
+        items = list(_disclosures)
+    sources = sorted({s for d in items for s in d["sources"]})
+    return {
+        "retrievals": len(items),
+        "characters_shared": sum(d["characters"] for d in items),
+        "sources_touched": sources,
+        "last_at": items[-1]["at"] if items else None,
+        "note": (
+            "Passages handed to a connected AI client. If that client is a "
+            "cloud model, this text reached it. Your documents themselves "
+            "were not uploaded — only these excerpts, in answer to these "
+            "questions."
+        ),
+    }
+
+
+def recent_disclosures(limit: int = 50) -> list[dict]:
+    with _lock:
+        return list(_disclosures)[-limit:]
 
 
 def declare(host: str, purpose_text: str, port: int = 443) -> None:
@@ -241,6 +298,7 @@ def snapshot() -> dict:
         "declared_hosts": [
             e["host"] for e in external_list if e["source"] == "declared"
         ],
+        "disclosures": disclosure_summary(),
         "truncated": len(events) >= MAX_EVENTS,
         "method": (
             "Connections marked 'observed' are seen at the socket layer and "

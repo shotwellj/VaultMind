@@ -72,6 +72,18 @@ Then open `http://localhost:8000`. Docker handles everything including Ollama.
 
 **Agent mode** — Toggle 🌐 Agent and VaultMind combines your private vault with live web search for questions your docs can't answer alone.
 
+**Use it from Claude, Cursor, or Claude Code** — VaultMind ships an MCP server, so your assistant can search your vault without your documents being uploaded anywhere:
+
+```json
+{
+  "mcpServers": {
+    "vaultmind": { "command": "uvx", "args": ["vaultmind-mcp"] }
+  }
+}
+```
+
+Passages the assistant retrieves *do* reach whatever model it runs on — the difference from uploading your files is that you choose what leaves, one question at a time, and every passage is logged. See [mcp/README.md](mcp/README.md).
+
 ---
 
 ## How It Works

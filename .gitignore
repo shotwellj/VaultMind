@@ -54,3 +54,8 @@ backend/.vaultmind_token
 
 # Internal planning docs — keep out of the public repo
 ROADMAP-INTERNAL.md
+
+# MCP package build artifacts
+mcp/dist/
+mcp/build/
+mcp/*.egg-info/
