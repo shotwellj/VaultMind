@@ -19,6 +19,8 @@ import requests
 from pathlib import Path
 from typing import Optional
 
+from net_guard import assert_fetchable_url, BlockedURL
+
 
 PROFILE_DIR = Path.home() / ".vaultmind" / "profile"
 PROFILE_FILE = PROFILE_DIR / "profile.json"
@@ -170,6 +172,12 @@ def fetch_linkedin_profile(linkedin_url: str) -> Optional[str]:
     url = linkedin_url.strip().rstrip("/")
     if not url.startswith("http"):
         url = "https://" + url
+
+    try:
+        assert_fetchable_url(url)
+    except BlockedURL as e:
+        print(f"[UserProfile] Refusing to fetch {url!r}: {e}")
+        return None
 
     try:
         resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)

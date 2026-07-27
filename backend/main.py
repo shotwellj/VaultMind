@@ -26,6 +26,7 @@ from ddgs import DDGS
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from company_intel import analyze_agency_listings
+from net_guard import assert_fetchable_url, BlockedURL
 from router import route_file, route_query, RouteType, IMAGE_EXTENSIONS
 from vlm import extract_pdf_with_vlm, extract_image_with_vlm, get_available_vlm, vlm_available
 from query_intelligence import (
@@ -199,6 +200,8 @@ PUBLIC_PATHS = {
     "/", "/health", "/manifest.json",
     "/auth/gmail/callback", "/favicon.ico",
 }
+
+
 
 # ── Gmail paths ───────────────────────────────────────────────
 GMAIL_SCOPES     = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -1965,6 +1968,10 @@ async def ingest_url(data: UrlIngest):
     if any(d in data.url for d in BLOCKED):
         return {"error": "This site blocks scrapers. Try company career pages, Builtin, or Wellfound instead."}
     try:
+        assert_fetchable_url(data.url)
+    except BlockedURL as e:
+        return {"error": str(e)}
+    try:
         r = requests.get(data.url, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2531,6 +2538,8 @@ def _is_staffing_agency_url(url: str) -> bool:
 def _scrape_agency_listing_page(url: str) -> list[dict]:
     """Scrape a staffing agency job board page and extract individual job URLs.
     Returns list of {url, title, location, job_type, pay}."""
+    if _is_blocked_url(url):
+        return []
     try:
         r = requests.get(url, timeout=12, headers=BROWSER_HEADERS, stream=True)
         if r.status_code != 200:
@@ -2583,6 +2592,11 @@ def _deep_scrape_job_pages(job_urls: list[dict], max_pages: int = 15) -> list[di
     results = []
     for entry in job_urls[:max_pages]:
         url = entry["url"]
+        # These URLs come out of a scraped page, so they are third-party
+        # input even though the user pasted the page they were found on.
+        if _is_blocked_url(url):
+            results.append(entry)
+            continue
         try:
             r = requests.get(url, timeout=10, headers=BROWSER_HEADERS)
             if r.status_code != 200:
@@ -3437,9 +3451,22 @@ _JOB_INTENT_RE = _re.compile(
 )
 
 def _is_blocked_url(url: str) -> bool:
-    """Check if a URL matches the blocklist."""
-    url_lower = url.lower()
-    return any(d in url_lower for d in SCRAPE_BLOCKLIST)
+    """True if this URL must not be fetched.
+
+    Covers both the "site fights scrapers" blocklist and the security
+    check — a URL arriving from search results or from indexed content
+    can point at localhost or the private network just as easily as one
+    the user pasted.
+    """
+    url_lower = (url or "").lower()
+    if any(d in url_lower for d in SCRAPE_BLOCKLIST):
+        return True
+    try:
+        assert_fetchable_url(url)
+    except BlockedURL as e:
+        print(f"[VaultMind] Refusing to fetch {url!r}: {e}")
+        return True
+    return False
 
 def web_search(query: str, max_results: int = 8) -> list[dict]:
     """Single DuckDuckGo search."""
