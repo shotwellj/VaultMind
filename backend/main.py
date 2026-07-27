@@ -1,11 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
+from fastapi.responses import (
+    StreamingResponse, FileResponse, HTMLResponse, JSONResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import asyncio
 import os
+import secrets
 import uuid
 import json
 import io
@@ -70,7 +73,9 @@ from proactive_intel import (
 )
 from rbac import (
     create_user, authenticate, generate_token, validate_token,
-    check_permission, get_audit_log, assign_workspace,
+    # Aliased: the /audit-log route handler below is also named
+    # get_audit_log and would otherwise shadow this import.
+    check_permission, get_audit_log as _rbac_get_audit_log, assign_workspace,
     get_user, list_users, update_role, Role,
 )
 from doc_compare import compare_documents, export_comparison_markdown
@@ -152,6 +157,48 @@ CONFIG_FILE      = os.path.join(DATA_DIR, "connector_config.json")
 FEED_FILE        = os.path.join(DATA_DIR, "feed_events.json")
 CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+
+# ── Local access token ────────────────────────────────────────
+# Every endpoint below reads or writes the user's private vault, and the
+# API used to be completely unauthenticated with allow_origins=["*"] —
+# meaning any page in any open browser tab could fetch localhost:8000 and
+# read every indexed document. This token closes that, and also protects
+# the LAN when someone follows the README's phone/Tailscale instructions.
+TOKEN_FILE = os.path.join(DATA_DIR, ".vaultmind_token")
+
+
+def _load_or_create_token() -> str:
+    override = os.environ.get("VAULTMIND_TOKEN")
+    if override:
+        return override
+    try:
+        with open(TOKEN_FILE) as f:
+            existing = f.read().strip()
+            if existing:
+                return existing
+    except FileNotFoundError:
+        pass
+    token = secrets.token_urlsafe(32)
+    # 0600 — the token is equivalent to read access to everything indexed.
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token)
+    return token
+
+
+AUTH_TOKEN = _load_or_create_token()
+
+# Endpoints reachable without the token. Deliberately tiny:
+#   /            — serves the UI, which is where the token is handed out
+#   /health      — polled by start.sh and the Electron launcher before the
+#                  token file is necessarily readable by them
+#   /manifest.json, /icon-*.png — PWA assets fetched by the browser directly
+#   /auth/gmail/callback — Google redirects the browser here; we cannot
+#                  attach a header to a third-party redirect
+PUBLIC_PATHS = {
+    "/", "/health", "/manifest.json",
+    "/auth/gmail/callback", "/favicon.ico",
+}
 
 # ── Gmail paths ───────────────────────────────────────────────
 GMAIL_SCOPES     = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -438,9 +485,51 @@ print(f"\n{'='*50}")
 print(f"  VaultMind v1.0.0 starting up…")
 print(f"{'='*50}\n")
 
+@app.middleware("http")
+async def require_local_token(request, call_next):
+    """Reject anything that cannot present the local token.
+
+    Runs before routing, so it covers every endpoint including ones added
+    later. Preflights are allowed through because browsers send them
+    without custom headers; the actual request still has to carry the
+    token, and the CORS allowlist below decides whether the response is
+    readable at all.
+    """
+    if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    supplied = (
+        request.headers.get("X-VaultMind-Token")
+        or request.query_params.get("token")
+        or ""
+    )
+    if not secrets.compare_digest(supplied, AUTH_TOKEN):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Missing or invalid VaultMind token.",
+                "hint": "Open http://localhost:8000 in a browser, or send the "
+                        "value of backend/.vaultmind_token as the "
+                        "X-VaultMind-Token header.",
+            },
+        )
+    return await call_next(request)
+
+
+# Only pages served from the local backend may read API responses. This was
+# allow_origins=["*"], which let any site a user visited read their vault.
+ALLOWED_ORIGINS = [
+    f"http://{host}:{port}"
+    for host in ("localhost", "127.0.0.1")
+    for port in ("8000", "8080", "3000")
+]
+_extra_origin = os.environ.get("VAULTMIND_ALLOWED_ORIGIN")
+if _extra_origin:
+    ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origin.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -451,9 +540,24 @@ FRONTEND_FILE = os.path.join(FRONTEND_DIR, "index.html")
 
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
-    if os.path.exists(FRONTEND_FILE):
-        return FileResponse(FRONTEND_FILE)
-    return {"message": "VaultMind API running. Frontend not found."}
+    """Serve the UI with the local token baked in.
+
+    This is how the browser gets the token without the user ever handling
+    it: the page is same-origin with the API, so anything able to read
+    this HTML could already reach the API from that origin.
+    """
+    if not os.path.exists(FRONTEND_FILE):
+        return {"message": "VaultMind API running. Frontend not found."}
+
+    with open(FRONTEND_FILE, encoding="utf-8") as f:
+        html = f.read()
+
+    injected = f'<script>window.VAULTMIND_TOKEN={json.dumps(AUTH_TOKEN)};</script>'
+    if "<head>" in html:
+        html = html.replace("<head>", "<head>\n" + injected, 1)
+    else:
+        html = injected + html
+    return HTMLResponse(html)
 
 @app.get("/manifest.json", include_in_schema=False)
 async def serve_manifest():
@@ -605,11 +709,17 @@ class AgentRequest(BaseModel):
     matter_id: str = ""
     model:     str = ""
 
-@app.post("/agent")
+@app.post("/lam/agent")
 async def agent_endpoint(req: AgentRequest):
     """
     LAM agent mode: plan and execute multi-step actions.
     Auto-executes low-risk tools, stages high-risk ones for review.
+
+    Lives at /lam/agent, not /agent. It used to be registered at /agent,
+    which shadowed the chat-pipeline handler further down this file —
+    Starlette matches in registration order — so the UI's agent toggle,
+    which posts {message: ...}, got a 422 from this handler's {query: ...}
+    schema and rendered nothing at all.
     """
     # First do RAG to get context
     col = get_collection()
@@ -1036,7 +1146,7 @@ async def auth_assign_workspace(data: dict):
 @app.get("/auth/audit")
 async def auth_audit(limit: int = 100):
     """Get access audit log."""
-    return {"entries": get_audit_log(limit=limit)}
+    return {"entries": _rbac_get_audit_log(limit=limit)}
 
 # ── Phase 5: Document Comparison Endpoints ────────────────────
 

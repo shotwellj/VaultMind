@@ -565,7 +565,36 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
 <div class="toast" id="toast"></div>
 
 <script>
-const API = 'http://localhost:8000';
+// Same origin as whatever served this page, so reaching VaultMind from a
+// phone or over Tailscale works without editing this file. Falls back to
+// localhost only when opened straight off disk (file://).
+const API = location.origin.startsWith('http')
+  ? location.origin
+  : 'http://localhost:8000';
+
+// The backend injects window.VAULTMIND_TOKEN when it serves this page.
+// Attach it to every API call rather than touching all 28 fetch sites.
+(function attachVaultMindToken() {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (!url.startsWith(API) && !url.startsWith('/')) {
+      return nativeFetch(input, init);   // third-party request, leave alone
+    }
+    const headers = new Headers(init.headers || (input && input.headers) || {});
+    if (window.VAULTMIND_TOKEN) {
+      headers.set('X-VaultMind-Token', window.VAULTMIND_TOKEN);
+    }
+    return nativeFetch(input, { ...init, headers });
+  };
+})();
+
+if (!window.VAULTMIND_TOKEN) {
+  console.warn(
+    'VaultMind: no access token. Open the app at ' + API +
+    ' rather than from a file:// path, or API calls will return 401.'
+  );
+}
 
 // ── State ──────────────────────────────────────────────────────
 let currentModel  = 'mistral';

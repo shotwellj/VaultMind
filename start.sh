@@ -94,7 +94,9 @@ echo ""
 echo -e "${GREEN}✅  VaultMind is ready!${NC}"
 echo "────────────────────────────────────────"
 echo ""
-open "$FRONTEND"
+# Must be the served URL, not the file:// path — the backend hands the
+# access token to the page it serves, and file:// is a different origin.
+open "http://localhost:8000"
 
 # Keep running — catch Ctrl+C to shut everything down cleanly
 echo "Press Ctrl+C to stop VaultMind."
