@@ -480,8 +480,103 @@ AVAILABLE_MODELS = [
 # ── Single vault collection ───────────────────────────────────
 # Everything lives in one collection — docs, emails, web pages, all of it.
 
+VAULT_COLLECTION = "vaultmind_vault"
+
+# Cosine keeps distances in a 0–2 band no matter how long the embedding
+# vectors are. Chroma's default is squared L2, which for nomic-embed-text
+# lands in the hundreds — far above every relevance threshold in this file,
+# so unpinned vault retrieval silently matched nothing.
+VAULT_SPACE = {"hnsw:space": "cosine"}
+
+_collection_ready = False
+
+
+def _migrate_collection_to_cosine(existing):
+    """Rebuild the vault under cosine distance, reusing the stored vectors.
+
+    Chroma fixes the distance function at creation time, so an older L2
+    collection has to be copied rather than reconfigured. Embeddings are
+    carried over as-is, so this costs no model calls and no re-reading of
+    the user's files.
+    """
+    total = existing.count()
+    print(f"[Vault] Migrating {total} chunks to cosine distance…")
+
+    staging_name = f"{VAULT_COLLECTION}_cosine_migration"
+    try:
+        chroma.delete_collection(staging_name)
+    except Exception:
+        pass
+    staging = chroma.create_collection(staging_name, metadata=VAULT_SPACE)
+
+    batch, offset = 500, 0
+    while offset < total:
+        page = existing.get(
+            limit=batch,
+            offset=offset,
+            include=["documents", "metadatas", "embeddings"],
+        )
+        if not page["ids"]:
+            break
+        staging.add(
+            ids=page["ids"],
+            documents=page["documents"],
+            metadatas=page["metadatas"],
+            embeddings=page["embeddings"],
+        )
+        offset += len(page["ids"])
+
+    chroma.delete_collection(VAULT_COLLECTION)
+    # Chroma has no rename, so copy the staging rows into a freshly created
+    # collection under the real name, then drop staging.
+    final = chroma.create_collection(VAULT_COLLECTION, metadata=VAULT_SPACE)
+    offset = 0
+    while offset < total:
+        page = staging.get(
+            limit=batch,
+            offset=offset,
+            include=["documents", "metadatas", "embeddings"],
+        )
+        if not page["ids"]:
+            break
+        final.add(
+            ids=page["ids"],
+            documents=page["documents"],
+            metadatas=page["metadatas"],
+            embeddings=page["embeddings"],
+        )
+        offset += len(page["ids"])
+    chroma.delete_collection(staging_name)
+
+    print(f"[Vault] Migration complete — {final.count()} chunks under cosine.")
+    return final
+
+
 def get_collection():
-    return chroma.get_or_create_collection("vaultmind_vault")
+    """Return the vault collection, migrating it to cosine once if needed."""
+    global _collection_ready
+
+    if _collection_ready:
+        return chroma.get_or_create_collection(VAULT_COLLECTION, metadata=VAULT_SPACE)
+
+    existing = chroma.get_or_create_collection(VAULT_COLLECTION, metadata=VAULT_SPACE)
+    space = (existing.metadata or {}).get("hnsw:space")
+
+    if space != "cosine" and existing.count() > 0:
+        try:
+            existing = _migrate_collection_to_cosine(existing)
+        except Exception as e:
+            # A failed migration must not take the app down, but the user needs
+            # to know retrieval is still running on the broken distance metric.
+            print(f"[Vault] Cosine migration failed ({e}). Retrieval quality "
+                  f"will be degraded until the vault is re-indexed.")
+    elif space != "cosine":
+        # Empty collection created under the old default — safe to recreate.
+        chroma.delete_collection(VAULT_COLLECTION)
+        existing = chroma.create_collection(VAULT_COLLECTION, metadata=VAULT_SPACE)
+
+    _collection_ready = True
+    return existing
 
 # ── Models API ────────────────────────────────────────────────
 
@@ -2449,7 +2544,21 @@ def _deep_scrape_job_pages(job_urls: list[dict], max_pages: int = 15) -> list[di
             results.append(entry)
     return results
 
-RELEVANCE_THRESHOLD = 0.65   # ChromaDB L2 distance; tuned for personal docs
+# Cosine distance (see VAULT_SPACE), so the usable range is 0–2.
+#
+# Calibrated against a 653-chunk vault of mixed PDFs and Gmail using
+# nomic-embed-text: questions the vault could answer scored 0.28–0.41,
+# questions it could not scored 0.49–0.57. 0.45 sits in that gap.
+#
+# Re-derive with scripts/calibrate_threshold.py if you change the embedding
+# model — these numbers are specific to nomic-embed-text and do not transfer.
+RELEVANCE_THRESHOLD = float(os.environ.get("VAULTMIND_RELEVANCE_THRESHOLD", 0.45))
+# Second pass, used only when the strict pass finds nothing at all. Kept just
+# below the observed off-topic floor so a loosely-worded question can still
+# match without dragging in unrelated chunks.
+RELEVANCE_THRESHOLD_FALLBACK = float(
+    os.environ.get("VAULTMIND_RELEVANCE_FALLBACK", 0.48)
+)
 
 @app.post("/chat")
 async def chat(msg: ChatMessage):
@@ -2542,13 +2651,13 @@ async def chat(msg: ChatMessage):
         if not relevant_docs_with_dist:
             relevant_docs_with_dist = [
                 (d, m, dist) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
-                if dist < 0.85 and is_personal_doc(m)
+                if dist < RELEVANCE_THRESHOLD_FALLBACK and is_personal_doc(m)
             ]
 
         # Re-rank: boost chunks whose section header matches the query keywords
         q_words = set(msg.message.lower().split())
         def rerank_score(doc_text, meta, dist):
-            score = dist  # lower is better (L2 distance)
+            score = dist  # lower is better (cosine distance)
             section = meta.get("section", "").lower()
             if section:
                 overlap = len(q_words & set(section.split()))
@@ -3146,7 +3255,6 @@ async def query(msg: QueryMessage):
         chat_model = msg.model or DEFAULT_MODEL
         q_emb      = ollama.embeddings(model=EMBED_MODEL, prompt=msg.message)["embedding"]
 
-        RELEVANCE_THRESHOLD = 0.75
         vault_context = ""
         vault_sources = []
         v = col.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
