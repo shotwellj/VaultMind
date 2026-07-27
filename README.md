@@ -10,7 +10,22 @@ No API keys. No cloud. No subscription. Everything runs locally via [Ollama](htt
 
 ## Why VaultMind
 
-Every other "chat with your docs" tool sends your data to OpenAI, Anthropic, or some other cloud. VaultMind doesn't. The LLM runs on your hardware. The vector database lives on your disk. Nothing is transmitted anywhere.
+Every other "chat with your docs" tool sends your documents to OpenAI, Anthropic, or some other cloud. VaultMind doesn't. The LLM runs on your hardware, the vector database lives on your disk, and **your documents are never uploaded anywhere.**
+
+### What does leave your machine
+
+Being precise about this, because "100% local" is easy to say and easy to get wrong:
+
+| | Leaves your machine? |
+|---|---|
+| Your documents, their text, their embeddings | Never |
+| The model, and every answer it generates | Never — inference is local |
+| Your question, in **vault mode** | No |
+| Your question, in **agent mode** | Yes — sent to DuckDuckGo as a search query |
+| Pages VaultMind fetches for you | Yes — it requests the URL, like a browser |
+| Gmail / Notion sync | Yes — it authenticates to those APIs to pull your data down |
+
+So: the private corpus stays put, and the network is used only for search and for connectors you explicitly turn on. Agent mode is the one to know about — when it is on, your question text reaches a search engine. The privacy firewall (Settings → Privacy) strips some identifiers before searching, but it is regex-based unless you install spaCy, so treat it as a reduction in exposure rather than a guarantee. See `backend/requirements.txt`.
 
 | | VaultMind | ChatGPT / Claude | PrivateGPT | Obsidian Copilot |
 |---|---|---|---|---|
@@ -28,7 +43,7 @@ Every other "chat with your docs" tool sends your data to OpenAI, Anthropic, or 
 **Prerequisite:** [Ollama](https://ollama.ai/download) installed and running.
 
 ```bash
-git clone https://github.com/airblackbox/VaultMind.git
+git clone https://github.com/shotwellj/VaultMind.git
 cd VaultMind
 bash start.sh
 ```
@@ -87,7 +102,7 @@ Files / URLs / Gmail / Notion
       Streamed answer
 ```
 
-100% local. The API is FastAPI on `localhost:8000`. The UI is a single HTML file — no framework, no build step.
+Every step above runs on your machine. The API is FastAPI on `localhost:8000`. The UI is a single HTML file — no framework, no build step, no CDN.
 
 ---
 
@@ -148,6 +163,14 @@ From anywhere via [Tailscale](https://tailscale.com) (free, 5 min setup):
 
 Tap **Add to Home Screen** in Safari to install as a PWA.
 
+**Reaching it from another device takes two steps.** By default the backend binds to `127.0.0.1`, so nothing outside your Mac can connect. To change that:
+
+```bash
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Every endpoint requires a token, generated on first run and stored in `backend/.vaultmind_token`. Opening the app in a browser hands the page that token automatically. Prefer Tailscale over plain LAN — on a shared or public network, `0.0.0.0` exposes the port to everyone on it, and the token is then the only thing between them and your documents.
+
 ---
 
 ## What's Built
@@ -182,7 +205,14 @@ Apache 2.0. PRs welcome.
 cd backend && uvicorn main:app --reload --port 8000
 
 # Frontend is at http://localhost:8000 — edit frontend/index.html directly
+
+# Tests — these run in CI on every push
+pip install pytest && python -m pytest tests -v
 ```
+
+`tests/test_regressions.py` covers bugs that shipped in v1.0.0: the retrieval
+threshold, the shadowed `/agent` route, agent-tool path confinement, and the
+SSRF guard. If you touch any of those, that file should tell you.
 
 Open an issue for bugs. Open a discussion for feature ideas.
 

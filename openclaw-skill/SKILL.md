@@ -105,4 +105,4 @@ VaultMind must be running locally. If it isn't:
 4. Wait for the setup wizard to complete
 5. Retry the query
 
-GitHub: https://github.com/airblackbox/VaultMind
+GitHub: https://github.com/shotwellj/VaultMind

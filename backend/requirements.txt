@@ -1,18 +1,47 @@
-fastapi
-uvicorn[standard]
-aiofiles
-chromadb
-pypdf
-python-docx
-beautifulsoup4
-requests
-ddgs
-ollama
-python-multipart
-Pillow
-watchdog
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
-pdf2image
+# Bounded rather than floating. These were previously unpinned, which had
+# already caused a silent break: the ollama package changed the shape of
+# list() between versions and one call site was left reading the old form.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+aiofiles>=24.1,<26.0
+chromadb>=1.0,<2.0
+pypdf>=5.0,<7.0
+python-docx>=1.1,<2.0
+beautifulsoup4>=4.12,<5.0
+requests>=2.32,<3.0
+ddgs>=9.0,<10.0
+ollama>=0.4,<1.0
+python-multipart>=0.0.9,<0.1
+Pillow>=10.4,<13.0
+watchdog>=4.0,<7.0
+
+# Gmail connector
+google-auth>=2.30,<3.0
+google-auth-oauthlib>=1.2,<2.0
+google-auth-httplib2>=0.2,<1.0
+google-api-python-client>=2.140,<3.0
+
+# Scanned-PDF handling. Also needs the poppler binaries, which pip cannot
+# install: `brew install poppler` on macOS, `apt install poppler-utils` on
+# Debian/Ubuntu.
+pdf2image>=1.17,<2.0
+
+# Knowledge graph. knowledge_graph.py imports this but it was never listed,
+# so load_graph() returned None and every /graph/* endpoint silently
+# returned empty results.
+networkx>=3.2,<4.0
+
+# ── Optional ───────────────────────────────────────────────────
+# Not installed by default. Each changes behaviour when present.
+#
+#   spacy + en_core_web_sm
+#     Named-entity detection in privacy_firewall.py. WITHOUT IT the firewall
+#     falls back to regex, which only catches names carrying a title
+#     ("Dr Jane Roe") and lets ordinary names reach the search engine.
+#     If you are relying on the firewall to strip names:
+#         pip install spacy && python -m spacy download en_core_web_sm
+#
+#   pytesseract (plus the tesseract binary)
+#     OCR for image uploads in photo_pipeline.py. Without it, image text
+#     extraction returns a placeholder instead of real text.

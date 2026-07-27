@@ -1,0 +1,40 @@
+name: Tests
+
+# The release workflow only builds Electron installers on tags, so nothing
+# ever ran the ~15k lines of Python. This runs on every push and PR.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  python:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest
+
+      - name: Byte-compile every module
+        # Catches syntax errors and typos in files no test imports.
+        run: python -m compileall -q backend
+
+      - name: Check the app imports and every route is reachable
+        # Importing main.py exercises the ~30 module imports and route
+        # registration, which is where a shadowed route or a bad import
+        # would show up.
+        env:
+          VAULTMIND_DATA_DIR: ${{ runner.temp }}/vaultmind-data
+        run: python -m pytest tests -v
