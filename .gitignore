@@ -51,3 +51,6 @@ backend/knowledge_graph.json
 
 # Local auth token
 backend/.vaultmind_token
+
+# Internal planning docs — keep out of the public repo
+ROADMAP-INTERNAL.md

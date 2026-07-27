@@ -1,0 +1,121 @@
+# Roadmap
+
+Where VaultMind is going, and what it is deliberately not going to be.
+
+Dates are intent, not commitment — this is maintained by one person.
+
+---
+
+## What VaultMind is
+
+A personal AI that runs on your own machine, for the things you would never
+paste into a cloud chatbot. Your medical records, your comp history, your
+legal documents, your inbox.
+
+## What it is becoming
+
+Everything in this category asks you to take privacy on faith — "it runs
+locally," believe it or don't. VaultMind is being built so you don't have to
+take our word for it. The direction is **provable** privacy: a receipt for
+every session showing exactly what left your machine and what didn't, that
+you can verify yourself.
+
+---
+
+## Now — v1.1: Truth
+
+Subtraction and honesty. No new features.
+
+- [ ] **Honest privacy dashboard.** It currently reports a hardcoded empty
+      list of external connections regardless of what actually happened. It
+      will report real, per-session network activity you can check against
+      `tcpdump`.
+- [ ] **Delete what was never wired up.** The repo carries roughly 8k lines
+      of modules that no code path reaches — an unenforced RBAC layer, a
+      CUDA fine-tuning pipeline shipped inside a Mac app, an unmounted sync
+      protocol. They are being removed. See *Removed* below.
+- [ ] **Post-mortem on the retrieval bug.** Vault retrieval silently matched
+      nothing for months because the relevance threshold was written for one
+      distance metric and the collection used another. Fixed, with tests —
+      and worth writing up, because it is an easy bug to have.
+
+## Next — v1.2: MCP server
+
+Use your private vault as context inside Claude Desktop, Claude Code, or
+Cursor, without uploading your documents anywhere.
+
+- [ ] `vault_search`, `vault_get_document`, `vault_list_sources` over stdio
+- [ ] One-line install and a copy-paste config block
+- [ ] A log of exactly which passages were shared, per query
+
+**To be precise about the claim:** your documents stay on your machine, but
+passages returned to a cloud model *do* reach that model. The difference from
+uploading your files is that you choose what leaves, one question at a time,
+and you can see what it was.
+
+## Then — v1.3: First run
+
+Local AI apps die at install.
+
+- [ ] Chat working in ~90 seconds with a small model, while the better one
+      downloads in the background
+- [ ] Onboarding that indexes something real and shows you what it found,
+      instead of a blank prompt
+- [ ] Three model choices (Fast / Balanced / Deep) instead of six coequal ones
+- [ ] Fix or drop the Windows build — it currently ships an installer whose
+      backend cannot start
+
+## Later — v1.4: Receipts
+
+- [ ] Hash-chained session record: every network call made and not made,
+      every document read, every agent action taken
+- [ ] Exportable, independently verifiable evidence bundle
+- [ ] A bounty for anyone who can demonstrate a document leaving the machine
+
+## Later — v1.5: What it knows about you
+
+- [ ] A profile built from your own documents — employers, dates, recurring
+      people, renewals and deadlines
+- [ ] Proactive alerts: "your lease renews in 45 days"
+- [ ] Click any sentence in an answer to see the exact source passage
+
+---
+
+## Removed
+
+Being explicit, because deleting shipped code deserves an explanation.
+
+| Removed | Why |
+|---|---|
+| `rbac.py` and `/auth/*` | Roles and permissions in a single-user local app. Never enforced on any endpoint; the token check it defined was applied nowhere. |
+| `finetune_pipeline.py` | Generated a CUDA/Unsloth training script inside a macOS application. |
+| `mobile_sync.py` | 603 lines, imported by nothing. |
+| The mobile app | Called endpoints that do not exist and had never been run. |
+| `LAUNCH_CONTENT.md`, `PUSH_TO_GITHUB.md` | Personal scratch notes that should never have been committed. |
+
+The product had 112 registered endpoints and the interface used about 15.
+Fewer, working features beat more, aspirational ones.
+
+---
+
+## Non-goals
+
+Not planned, and saying so to save you the issue:
+
+- **Multi-user, teams, shared workspaces.** It is a single-user local app.
+- **Cloud sync.** Of anything, ever.
+- **Model training or fine-tuning.**
+- **Feature parity** with AnythingLLM, Open WebUI, or Msty. Different bet.
+- **Telemetry**, unless it is opt-in, local-first, and readable before it is
+  sent — which mostly means no.
+
+---
+
+## Influencing this
+
+Open an issue describing what you were trying to do, not which feature you
+want. Bug reports that include what you indexed and what you asked are worth
+more than feature requests.
+
+The clearest way to change the priorities above is to show that something is
+broken for real use.
