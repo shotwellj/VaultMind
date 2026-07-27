@@ -22,24 +22,28 @@ you can verify yourself.
 
 ---
 
-## Now — v1.1: Truth
+## v1.1: Truth — complete
 
 Subtraction and honesty. No new features.
 
-- [ ] **Honest privacy dashboard.** It currently reports a hardcoded empty
-      list of external connections regardless of what actually happened. It
-      will report real, per-session network activity you can check against
-      `tcpdump`.
+- [x] **Honest privacy dashboard.** It reported a hardcoded empty list of
+      external connections regardless of what actually happened. It now
+      reports real per-session network activity, observed at the socket
+      layer, that you can check against `tcpdump` — plus `/privacy/connections`
+      for the raw log. Connections the code cannot observe (web search runs
+      through a Rust HTTP client that bypasses Python sockets) are labelled
+      "reported" rather than "observed", so a self-report is never shown as
+      a measurement.
 - [x] **Delete what was never wired up.** 5,666 lines of modules that no
       code path reached — an unenforced RBAC layer, a CUDA fine-tuning
       pipeline shipped inside a Mac app, an unmounted sync protocol, and a
       mobile app calling endpoints that do not exist. See *Removed* below.
-- [ ] **Post-mortem on the retrieval bug.** Vault retrieval silently matched
+- [x] **Post-mortem on the retrieval bug.** Vault retrieval silently matched
       nothing for months because the relevance threshold was written for one
-      distance metric and the collection used another. Fixed, with tests —
-      and worth writing up, because it is an easy bug to have.
+      distance metric and the collection used another. Fixed, with tests.
+      Written up in [docs/posts/silent-rag-failure.md](posts/silent-rag-failure.md).
 
-## Next — v1.2: MCP server
+## Now — v1.2: MCP server
 
 Use your private vault as context inside Claude Desktop, Claude Code, or
 Cursor, without uploading your documents anywhere.
