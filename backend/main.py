@@ -560,7 +560,9 @@ async def serve_manifest():
 chroma = chromadb.PersistentClient(path=os.path.join(DATA_DIR, "chroma_db"))
 
 EMBED_MODEL   = "nomic-embed-text"
-DEFAULT_MODEL = "mistral"
+# Must match what start.sh and docker-compose pull, or a fresh install
+# selects a model that was never downloaded and the first chat fails.
+DEFAULT_MODEL = "llama3.2"
 
 AVAILABLE_MODELS = [
     {"id": "mistral",     "label": "Mistral 7B"},
@@ -2104,7 +2106,7 @@ class ChatMessage(BaseModel):
     message:       str
     history:       list[dict] = []
     workspace:     str = "Default"
-    model:         str = "mistral"
+    model:         str = DEFAULT_MODEL
     pinned_source: str = ""   # when set, restrict retrieval to this exact source
     skill:         str = ""   # optional skill context injected into system prompt
     custom_prompt: str = ""   # free-form system prompt from the prompts marketplace
@@ -2120,7 +2122,7 @@ class ConversationSave(BaseModel):
     id:       str
     title:    str = ""
     messages: list[dict] = []
-    model:    str = "mistral"
+    model:    str = DEFAULT_MODEL
     skill:    str = ""
 
 @app.get("/conversations")
@@ -2137,7 +2139,7 @@ async def list_conversations():
             convos.append({
                 "id":        data.get("id", fname.replace(".json", "")),
                 "title":     data.get("title", "Untitled"),
-                "model":     data.get("model", "mistral"),
+                "model":     data.get("model", DEFAULT_MODEL),
                 "skill":     data.get("skill", ""),
                 "count":     len(data.get("messages", [])),
                 "updated_at": os.path.getmtime(fpath),
@@ -2228,6 +2230,32 @@ _WEB_INTENT_PATTERNS = [
     r"https?://",  # If user pastes a URL, always do web mode
 ]
 _WEB_INTENT_RE = _re.compile("|".join(_WEB_INTENT_PATTERNS), _re.IGNORECASE)
+
+def _model_error_sse(model: str, error: Exception):
+    """SSE lines explaining a failed model call, in terms the user can act on.
+
+    Emitted as tokens rather than an error field because the UI renders
+    tokens into the answer bubble and has no error handler — an error the
+    interface silently drops is the same as no error at all.
+    """
+    detail = str(error)
+    if "not found" in detail.lower() or "404" in detail:
+        message = (
+            f"The model **{model}** isn't installed.\n\n"
+            f"Pull it with `ollama pull {model}`, or pick a different model "
+            f"from the sidebar. Installed models appear in that list."
+        )
+    elif "connection" in detail.lower() or "refused" in detail.lower():
+        message = (
+            "Can't reach Ollama. Start it with `ollama serve`, then try again."
+        )
+    else:
+        message = f"The model call failed: {detail}"
+
+    yield f"data: {json.dumps({'token': message})}\n\n"
+    yield f"data: {json.dumps({'error': detail, 'model': model})}\n\n"
+    yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
+
 
 def _looks_like_web_search(query: str) -> bool:
     """Heuristic: does this query want live web data?"""
@@ -2504,18 +2532,62 @@ def _deep_scrape_job_pages(job_urls: list[dict], max_pages: int = 15) -> list[di
 
 # Cosine distance (see VAULT_SPACE), so the usable range is 0–2.
 #
-# Calibrated against a 653-chunk vault of mixed PDFs and Gmail using
-# nomic-embed-text: questions the vault could answer scored 0.28–0.41,
-# questions it could not scored 0.49–0.57. 0.45 sits in that gap.
+# The cutoff between "the vault can answer this" and "it cannot" moves with
+# how much is indexed, and it moves a lot. Measured with nomic-embed-text:
 #
-# Re-derive with scripts/calibrate_threshold.py if you change the embedding
-# model — these numbers are specific to nomic-embed-text and do not transfer.
-RELEVANCE_THRESHOLD = float(os.environ.get("VAULTMIND_RELEVANCE_THRESHOLD", 0.45))
-# Second pass, used only when the strict pass finds nothing at all. Kept just
-# below the observed off-topic floor so a loosely-worded question can still
-# match without dragging in unrelated chunks.
+#   3-chunk vault    answerable 0.35–0.56   unanswerable 0.62–0.68
+#   653-chunk vault  answerable 0.28–0.41   unanswerable 0.49–0.57
+#
+# Both have a clean gap; the gap is in a different place. The more you index,
+# the more likely any query finds something vaguely close by chance, so
+# unanswerable questions score *lower* in a large vault and the boundary
+# tightens.
+#
+# A single constant is therefore wrong for somebody. A fixed 0.45 — correct
+# for the large vault — cuts off real answers in a small one, which means it
+# fails worst on a brand-new install with three documents in it. That is the
+# opposite of where you want to be wrong.
+#
+# So scale it. And when in doubt, err loose: a marginal chunk reaching the
+# model costs a few tokens, and the prompt already instructs it to answer
+# only from the sources — it reliably says "I could not find this" when the
+# context does not support an answer. A missed chunk, by contrast, is the
+# product's core promise failing silently, which is the bug this whole file
+# has already been burned by once.
+#
+# Re-derive for your own vault with scripts/calibrate_threshold.py.
+
+RELEVANCE_THRESHOLD_SMALL_VAULT = 0.58   # ≤ 50 chunks
+RELEVANCE_THRESHOLD_LARGE_VAULT = 0.45   # ≥ 500 chunks
+
+
+def relevance_threshold(chunk_count: int) -> float:
+    """Distance cutoff appropriate to how much is indexed."""
+    override = os.environ.get("VAULTMIND_RELEVANCE_THRESHOLD")
+    if override:
+        return float(override)
+
+    lo, hi = 50, 500
+    if chunk_count <= lo:
+        return RELEVANCE_THRESHOLD_SMALL_VAULT
+    if chunk_count >= hi:
+        return RELEVANCE_THRESHOLD_LARGE_VAULT
+    span = (chunk_count - lo) / (hi - lo)
+    return round(
+        RELEVANCE_THRESHOLD_SMALL_VAULT
+        - span * (RELEVANCE_THRESHOLD_SMALL_VAULT - RELEVANCE_THRESHOLD_LARGE_VAULT),
+        3,
+    )
+
+
+# Kept for callers that want a value without a count to hand. Prefer
+# relevance_threshold(col.count()).
+RELEVANCE_THRESHOLD = float(
+    os.environ.get("VAULTMIND_RELEVANCE_THRESHOLD", RELEVANCE_THRESHOLD_SMALL_VAULT)
+)
+# Second pass, used only when the strict pass finds nothing at all.
 RELEVANCE_THRESHOLD_FALLBACK = float(
-    os.environ.get("VAULTMIND_RELEVANCE_FALLBACK", 0.48)
+    os.environ.get("VAULTMIND_RELEVANCE_FALLBACK", 0.62)
 )
 
 @app.post("/chat")
@@ -2543,7 +2615,10 @@ async def chat(msg: ChatMessage):
     except Exception:
         pass
 
-    if msg.model and msg.model != "mistral":
+    # Anything other than the default is read as a deliberate choice. This
+    # compared against a hardcoded "mistral", which stopped meaning "the
+    # default" the moment the default changed.
+    if msg.model and msg.model != DEFAULT_MODEL:
         chat_model = msg.model  # user explicitly chose a model, respect it
     elif feedback_override and feedback_override.get("success_rate", 0) > 0.7:
         chat_model = feedback_override["model"]  # feedback-learned best route
@@ -2602,9 +2677,10 @@ async def chat(msg: ChatMessage):
             src = meta.get("source", "")
             return not (src.startswith("🌐") or src.startswith("http://") or src.startswith("https://"))
 
+        threshold = relevance_threshold(col.count())
         relevant_docs_with_dist = [
             (d, m, dist) for d, m, dist in zip(vault_docs, vault_meta, vault_dists)
-            if dist < RELEVANCE_THRESHOLD and is_personal_doc(m)
+            if dist < threshold and is_personal_doc(m)
         ]
         if not relevant_docs_with_dist:
             relevant_docs_with_dist = [
@@ -2986,13 +3062,32 @@ async def chat(msg: ChatMessage):
         messages.append({"role": "user", "content": msg.message})
 
         # ── Stream the LLM response and collect it ──────────────
+        #
+        # The error has to be caught around the *iteration*, not around the
+        # ollama.chat() call: that call returns a lazy generator, so a
+        # missing model surfaces as a 404 on the first `next()`, not on
+        # construction. Guarding only the call looks correct and catches
+        # nothing — the generator then dies mid-stream and the client sits
+        # on "Generating answer…" with no error, which is exactly what a
+        # fresh install saw when its default model had not been pulled.
         full_response = ""
-        stream = ollama.chat(model=chat_model, messages=messages, stream=True, options={"temperature": 0})
-        for chunk in stream:
-            token = chunk["message"]["content"]
-            if token:
-                full_response += token
-                yield f"data: {json.dumps({'token': token})}\n\n"
+        try:
+            for chunk in ollama.chat(model=chat_model, messages=messages,
+                                     stream=True, options={"temperature": 0}):
+                token = chunk["message"]["content"]
+                if token:
+                    full_response += token
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+        except Exception as e:
+            if not full_response:
+                for line in _model_error_sse(chat_model, e):
+                    yield line
+                return
+            # Partial answer already sent — tell the user it was cut short
+            # rather than letting it look complete.
+            yield f"data: {json.dumps({'token': f'\n\n[Response interrupted: {e}]'})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
+            return
 
         # ── Phase 3: Quality Gate ──────────────────────────────
         local_ctx = ""
@@ -3099,7 +3194,7 @@ async def chat(msg: ChatMessage):
 
 class DigestRequest(BaseModel):
     connector: str = "gmail"   # source prefix to filter on
-    model:     str = "mistral"
+    model:     str = DEFAULT_MODEL
     workspace: str = "vault"   # kept for compat, ignored
 
 @app.post("/digest")
@@ -3241,10 +3336,11 @@ async def mcp_search(req: McpSearch):
     if not hits["documents"] or not hits["documents"][0]:
         return {"results": [], "searched": query}
 
+    threshold = relevance_threshold(col.count())
     results = []
     for doc, meta, dist in zip(hits["documents"][0], hits["metadatas"][0],
                               hits["distances"][0]):
-        if dist >= RELEVANCE_THRESHOLD_FALLBACK:
+        if dist >= threshold:
             continue
         results.append({
             "source": meta.get("source", "unknown"),
@@ -3331,7 +3427,7 @@ class QueryMessage(BaseModel):
     message:   str
     mode:      str = "vault"
     workspace: str = "Default"
-    model:     str = "mistral"
+    model:     str = DEFAULT_MODEL
 
 @app.post("/query")
 async def query(msg: QueryMessage):
@@ -3344,9 +3440,10 @@ async def query(msg: QueryMessage):
         vault_sources = []
         v = col.query(query_embeddings=[q_emb], n_results=4, include=["documents", "metadatas", "distances"])
         if v["documents"][0]:
+            threshold = relevance_threshold(col.count())
             rel_docs, rel_meta = [], []
             for doc, meta, dist in zip(v["documents"][0], v["metadatas"][0], v["distances"][0]):
-                if dist < RELEVANCE_THRESHOLD:
+                if dist < threshold:
                     rel_docs.append(doc); rel_meta.append(meta)
             if rel_docs:
                 vault_context = "\n\n".join(rel_docs)

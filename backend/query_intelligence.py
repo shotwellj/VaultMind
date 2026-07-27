@@ -427,10 +427,30 @@ def build_prompt(classification: QueryClassification, query: str, context: str) 
 # ── Available Models Helper ──────────────────────────────────
 
 def get_available_models() -> list[str]:
-    """Query Ollama for installed models."""
+    """Query Ollama for installed models.
+
+    Handles both response shapes: older ollama clients returned dicts
+    keyed "name", current ones return objects with a .model attribute.
+    This read only the dict form, so on any recent client it raised,
+    returned [], and left the router recommending models purely from its
+    preference order — including ones the user had never pulled. On a
+    fresh install that meant routing chat to a model that was not there.
+    """
     try:
         import ollama
-        models = ollama.list()
-        return [m["name"].split(":")[0] for m in models.get("models", [])]
+        listing = ollama.list()
     except Exception:
         return []
+
+    entries = getattr(listing, "models", None)
+    if entries is None and isinstance(listing, dict):
+        entries = listing.get("models", [])
+
+    names = []
+    for entry in entries or []:
+        name = getattr(entry, "model", None)
+        if name is None and isinstance(entry, dict):
+            name = entry.get("model") or entry.get("name")
+        if name:
+            names.append(str(name).split(":")[0])
+    return names

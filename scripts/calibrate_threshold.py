@@ -94,10 +94,31 @@ def main() -> int:
         return 1
 
     suggested = round((worst_hit + best_miss) / 2, 2)
+    current = vaultmind.relevance_threshold(col.count())
+
     print(f"\nSuggested VAULTMIND_RELEVANCE_THRESHOLD={suggested}")
-    print(f"Suggested VAULTMIND_RELEVANCE_FALLBACK={round(min(best_miss - 0.01, suggested + 0.05), 2)}")
-    print(f"\nCurrently running with threshold={vaultmind.RELEVANCE_THRESHOLD} "
-          f"fallback={vaultmind.RELEVANCE_THRESHOLD_FALLBACK}")
+    print(f"Currently using {current} for {col.count()} chunks.")
+
+    if abs(suggested - current) < 0.03:
+        print("Close enough — the built-in default fits this vault.")
+    elif suggested > current:
+        print(
+            "\nThe default is stricter than your vault needs, so real answers\n"
+            "may be getting dropped. Set the environment variable above."
+        )
+    else:
+        print(
+            "\nThe default is looser than your vault needs. That mostly costs\n"
+            "a few tokens — the model is instructed to answer only from the\n"
+            "sources and will say so when they do not support an answer — but\n"
+            "you can tighten it with the environment variable above."
+        )
+
+    print(
+        "\nNote: the built-in default scales with vault size, because the\n"
+        "boundary moves as you index more. It is 0.58 under 50 chunks and\n"
+        "0.45 over 500. Re-run this after your vault grows substantially."
+    )
     return 0
 
 
