@@ -30,10 +30,10 @@ Subtraction and honesty. No new features.
       list of external connections regardless of what actually happened. It
       will report real, per-session network activity you can check against
       `tcpdump`.
-- [ ] **Delete what was never wired up.** The repo carries roughly 8k lines
-      of modules that no code path reaches — an unenforced RBAC layer, a
-      CUDA fine-tuning pipeline shipped inside a Mac app, an unmounted sync
-      protocol. They are being removed. See *Removed* below.
+- [x] **Delete what was never wired up.** 5,666 lines of modules that no
+      code path reached — an unenforced RBAC layer, a CUDA fine-tuning
+      pipeline shipped inside a Mac app, an unmounted sync protocol, and a
+      mobile app calling endpoints that do not exist. See *Removed* below.
 - [ ] **Post-mortem on the retrieval bug.** Vault retrieval silently matched
       nothing for months because the relevance threshold was written for one
       distance metric and the collection used another. Fixed, with tests —
@@ -90,11 +90,18 @@ Being explicit, because deleting shipped code deserves an explanation.
 | `rbac.py` and `/auth/*` | Roles and permissions in a single-user local app. Never enforced on any endpoint; the token check it defined was applied nowhere. |
 | `finetune_pipeline.py` | Generated a CUDA/Unsloth training script inside a macOS application. |
 | `mobile_sync.py` | 603 lines, imported by nothing. |
-| The mobile app | Called endpoints that do not exist and had never been run. |
+| The mobile app | Called `/sync/pull`, `/sync/push` and `/sync/register`, none of which exist. Had never been run. |
+| `mobile_alerts.py` | Push alerts for the app above. No push transport was ever implemented. |
+| `photo_pipeline.py` | Backed only `/photos/*`, which raised on every call — it was passed argument names the function did not accept. Photo upload goes through `/upload-photo` and is unaffected. |
+| `call_intel.py`, `contact_intel.py` | Unreachable from the interface; audio transcription and several core paths were explicit placeholders. |
 | `LAUNCH_CONTENT.md`, `PUSH_TO_GITHUB.md` | Personal scratch notes that should never have been committed. |
 
-The product had 112 registered endpoints and the interface used about 15.
+The product had 112 registered routes and the interface used 24 of them.
 Fewer, working features beat more, aspirational ones.
+
+Still under review for a later pass: `export_layer.py`, `vertical_kit.py`,
+`doc_compare.py` and the `/feedback/*` surface are also unreachable from the
+UI, but each maps to something on the roadmap above, so they stay for now.
 
 ---
 
