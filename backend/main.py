@@ -1,3 +1,11 @@
+# Installed before anything else imports a networking library, so that no
+# dependency captures an unpatched reference to socket.connect. This is what
+# lets the privacy panel report observed connections rather than asserted
+# ones — see egress_log.py.
+import egress_log
+from egress_log import labelled as egress_log_labelled
+egress_log.install()
+
 from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -253,6 +261,7 @@ def get_notion_page_text(page_id: str, headers: dict) -> str:
         print(f"Notion block fetch error: {e}")
         return ""
 
+@egress_log_labelled("Notion sync (pulling your pages down)")
 def sync_notion_now(notion_cfg: dict):
     token = notion_cfg.get("token", "")
     if not token:
@@ -346,6 +355,7 @@ def extract_email_text(msg_data: dict) -> tuple[str, str]:
     full    = f"From: {sender}\nDate: {date}\nSubject: {subject}\n\n{body[:3000]}"
     return subject, full
 
+@egress_log_labelled("Gmail sync (pulling your mail down)")
 def sync_gmail_now(gmail_cfg: dict, max_emails: int = 100) -> int:
     """Fetch and index recent inbox emails into the single vault collection."""
     service = get_gmail_service()
@@ -1748,17 +1758,32 @@ async def privacy_dashboard():
         else:                               stype = "Documents"
         source_types[stype] = source_types.get(stype, 0) + 1
 
-    cfg = load_config()
+    cfg     = load_config()
+    egress  = egress_log.snapshot()
+
     return {
         "total_chunks":         col.count(),
         "total_sources":        len(sources_seen),
         "source_breakdown":     source_types,
-        "external_connections": [],
-        "network_calls":        "Only during Agent mode web search or Notion sync — never for your personal data",
         "data_location":        os.path.abspath(DATA_DIR),
         "watch_folders":        cfg.get(WATCH_FOLDERS_KEY, []),
         "checked_at":           datetime.now(timezone.utc).isoformat(),
+
+        # Observed, not asserted. This block used to be a hardcoded empty
+        # list and a sentence claiming personal data never left the machine,
+        # neither of which was derived from anything that happened.
+        "network": egress,
     }
+
+
+@app.get("/privacy/connections")
+async def privacy_connections(limit: int = Query(default=100, le=500)):
+    """The raw connection log behind the privacy panel.
+
+    Exposed so the summary can be checked rather than trusted: run this
+    alongside tcpdump and the two should agree.
+    """
+    return {"connections": egress_log.recent(limit)}
 
 # ── URL ingest ────────────────────────────────────────────────
 
@@ -1776,12 +1801,13 @@ async def ingest_url(data: UrlIngest):
     except BlockedURL as e:
         return {"error": str(e)}
     try:
-        r = requests.get(data.url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "DNT": "1",
-        })
+        with egress_log.purpose("indexing a URL you pasted"):
+            r = requests.get(data.url, timeout=15, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "DNT": "1",
+            })
         if r.status_code == 403:
             return {"error": "This site blocks scrapers (403). Try the company's direct careers page."}
         if r.status_code == 429:
@@ -3273,7 +3299,16 @@ def _is_blocked_url(url: str) -> bool:
     return False
 
 def web_search(query: str, max_results: int = 8) -> list[dict]:
-    """Single DuckDuckGo search."""
+    """Single DuckDuckGo search.
+
+    This is the one path that sends the user's own words off the machine,
+    so it is labelled explicitly in the privacy panel.
+    """
+    # ddgs uses primp, a Rust HTTP client that opens sockets outside Python,
+    # so the socket monitor cannot see this request. Declare it explicitly —
+    # otherwise the privacy panel would show no external activity while the
+    # user's words were being sent to a search engine.
+    egress_log.declare("duckduckgo.com", "web search — your query text is sent")
     try:
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
@@ -3306,6 +3341,7 @@ def multi_search(query: str, max_total: int = 12) -> list[dict]:
 
     return all_hits[:max_total]
 
+@egress_log_labelled("fetching a web page")
 def smart_scrape(url: str, max_chars: int = 3000) -> str:
     """Safely scrape a page with blocklist, size limit, and timeout."""
     if _is_blocked_url(url):

@@ -160,3 +160,63 @@ def test_sensitive_paths_are_not_public():
 
     for path in ("/files", "/chat", "/query", "/debug-chunks", "/lam/agent"):
         assert path not in main.PUBLIC_PATHS
+
+
+# ── Privacy panel ──────────────────────────────────────────────
+
+def test_privacy_reports_observed_connections_not_a_hardcoded_list():
+    """It used to return external_connections: [] no matter what happened."""
+    import egress_log
+    import socket
+
+    egress_log.install()
+    before = egress_log.snapshot()["external_connection_count"]
+
+    # A real connection to a real external address, via CPython sockets.
+    try:
+        s = socket.create_connection(("example.com", 80), timeout=10)
+        s.close()
+    except OSError:
+        pytest.skip("no network available")
+
+    after = egress_log.snapshot()
+    assert after["external_connection_count"] > before
+    assert any("example.com" in h["host"] for h in after["external"])
+
+
+def test_loopback_is_not_counted_as_external():
+    """Ollama runs on localhost; calling it is not data leaving the machine."""
+    import egress_log
+
+    egress_log.install()
+    egress_log._record("127.0.0.1", 11434)
+    snap = egress_log.snapshot()
+    assert any(h["host"] == "127.0.0.1" for h in snap["local"])
+    assert not any(h["host"] == "127.0.0.1" for h in snap["external"])
+
+
+def test_unobservable_requests_are_marked_declared_not_observed():
+    """ddgs uses primp, a Rust client that bypasses CPython sockets.
+
+    Reporting those as observed would make a self-report look like a
+    measurement — the exact failure this module exists to avoid.
+    """
+    import egress_log
+
+    egress_log.declare("duckduckgo.com", "web search")
+    snap = egress_log.snapshot()
+
+    entry = next(h for h in snap["external"] if h["host"] == "duckduckgo.com")
+    assert entry["source"] == "declared"
+    assert "duckduckgo.com" in snap["declared_hosts"]
+
+
+def test_privacy_endpoint_exposes_no_static_assurance():
+    """Guards against a hardcoded 'nothing ever leaves' string coming back."""
+    import inspect
+
+    import main
+
+    source = inspect.getsource(main.privacy_dashboard)
+    assert "never for your personal data" not in source
+    assert '"external_connections": []' not in source

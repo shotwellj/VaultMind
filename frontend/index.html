@@ -1281,9 +1281,39 @@ async function openPrivacy() {
     const rows=Object.entries(d.source_breakdown||{}).sort((a,b)=>b[1]-a[1])
       .map(([src,cnt])=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text2)">${src}</span><span style="font-size:12px;color:var(--text4);background:var(--bg4);padding:2px 9px;border-radius:10px">${cnt} chunks</span></div>`).join('');
     const watchList=(d.watch_folders||[]).map(f=>`<div style="font-size:12px;color:var(--text3);padding:4px 0">👁️ ${f}</div>`).join('')||'<div style="font-size:12px;color:var(--text5);font-style:italic">No folders watched</div>';
+    // Network activity, from the socket monitor. This replaced a static
+    // "100% local — never uploaded" badge that was shown regardless of what
+    // had actually happened.
+    const net = d.network || {};
+    const ext = net.external || [];
+    const extCount = net.external_connection_count || 0;
+    const netTile = extCount === 0
+      ? `<div style="font-size:28px;font-weight:700;color:var(--green)">0</div><div style="font-size:11px;color:var(--text4);margin-top:4px">External connections this session</div>`
+      : `<div style="font-size:28px;font-weight:700;color:var(--accent)">${extCount}</div><div style="font-size:11px;color:var(--text4);margin-top:4px">External connections this session</div>`;
+
+    const netRows = ext.length ? ext.map(h=>{
+      const declared = h.source === 'declared';
+      const badge = declared
+        ? `<span title="Self-reported by the code making the request — this library opens sockets outside Python and cannot be independently observed" style="font-size:9px;color:var(--text5);border:1px solid var(--border);padding:1px 6px;border-radius:8px">reported</span>`
+        : `<span title="Seen at the socket layer — should match tcpdump" style="font-size:9px;color:var(--green);border:1px solid var(--border);padding:1px 6px;border-radius:8px">observed</span>`;
+      return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span style="font-size:13px;color:var(--text2);font-family:monospace;word-break:break-all">${escapeHtml(h.host)}</span>
+          <span style="display:flex;gap:6px;align-items:center;flex-shrink:0">${badge}<span style="font-size:12px;color:var(--text4)">×${escapeHtml(h.connections)}</span></span>
+        </div>
+        <div style="font-size:11px;color:var(--text5);margin-top:3px">${escapeHtml((h.purposes||[]).join(', '))}</div>
+      </div>`;
+    }).join('')
+      : `<div style="font-size:12px;color:var(--green)">Nothing has left this machine since VaultMind started.</div>`;
+
     body.innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
       <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center"><div style="font-size:28px;font-weight:700;color:var(--accent)">${d.total_chunks||0}</div><div style="font-size:11px;color:var(--text4);margin-top:4px">Total chunks indexed</div></div>
-      <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center"><div style="font-size:28px;font-weight:700;color:var(--green)">🔒</div><div style="font-size:11px;color:var(--text4);margin-top:4px">100% local — never uploaded</div></div>
+      <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">${netTile}</div>
+    </div>
+    <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:600;color:var(--text5);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px">Network activity</div>
+      ${netRows}
+      <div style="font-size:10px;color:var(--text5);margin-top:10px;line-height:1.5">Your documents are never uploaded. This lists every host the app connected to, observed at the socket layer. Counts are connections, not requests.</div>
     </div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px"><div style="font-size:10px;font-weight:600;color:var(--text5);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px">Data Location</div><div style="font-size:12px;color:var(--text3);font-family:monospace;background:var(--bg);padding:8px 10px;border-radius:6px">${d.data_location||'~/.vaultmind/chroma'}</div></div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px"><div style="font-size:10px;font-weight:600;color:var(--text5);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px">Source Breakdown</div>${rows||'<div style="font-size:12px;color:var(--text5);font-style:italic">Nothing indexed yet</div>'}</div>
