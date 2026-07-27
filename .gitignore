@@ -35,3 +35,19 @@ backend/feed_events.json
 backend/gmail_token.json
 backend/gmail_credentials.json
 vaultmind.log
+
+# Runtime user data — never commit. These hold your actual documents,
+# questions, and answers.
+backend/conversations/
+backend/chroma/
+backend/lam_audit/
+backend/matters/
+backend/staged_actions.json
+backend/mobile_alerts.db
+backend/user_profile.json
+backend/feedback/
+backend/knowledge_graph.json
+**/*.tags.json
+
+# Local auth token
+backend/.vaultmind_token
