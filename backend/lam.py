@@ -7,6 +7,7 @@ Audit trail for every action taken.
 
 import json
 import os
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -15,13 +16,16 @@ from typing import Any, Optional
 
 # ── Risk Tiers ─────────────────────────────────────────────────
 
+# Auto-execute is for tools that only read, or that write metadata
+# alongside a file. Anything that moves, deletes, or sends must be staged
+# for a human, because the plan is written by a model whose context
+# includes retrieved web and email content.
 AUTO_EXECUTE_TOOLS = {
     "search_knowledge_base",
     "tag_document",
     "summarize_document",
     "extract_dates",
     "log_time_entry",
-    "move_file_internal",
 }
 
 STAGED_TOOLS = {
@@ -30,6 +34,9 @@ STAGED_TOOLS = {
     "create_calendar_event",
     "check_conflicts",
     "send_email",
+    # Relocating a file is destructive and was previously auto-executed
+    # with an unconfined shutil.move.
+    "move_file_internal",
 }
 
 
@@ -133,6 +140,128 @@ def reject_staged_action(action_id: str) -> dict:
 MATTERS_DIR = os.path.join(os.path.dirname(__file__), "..", "matters")
 os.makedirs(MATTERS_DIR, exist_ok=True)
 
+
+# ── Filesystem confinement ─────────────────────────────────────
+# Tool arguments are chosen by the language model, and the model's input
+# includes retrieved chunks — which can come from scraped web pages and
+# indexed email. Treat every path below as attacker-influenced: without
+# these checks, "summarize_document" reads any file on the machine and
+# "move_file_internal" relocates any file, both with no approval step.
+
+class PathNotAllowed(Exception):
+    """Raised when a tool is asked to touch a path outside the allowed roots."""
+
+
+_ALLOWED_ROOTS: list[Path] = [Path(MATTERS_DIR).resolve()]
+
+
+def set_allowed_roots(paths) -> None:
+    """Replace the set of directories agent tools may touch.
+
+    main.py calls this at startup so folders the user explicitly asked
+    VaultMind to index are reachable, and nothing else is.
+    """
+    global _ALLOWED_ROOTS
+    roots = [Path(MATTERS_DIR).resolve()]
+    for p in paths or []:
+        try:
+            resolved = Path(p).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_dir():
+            roots.append(resolved)
+    _ALLOWED_ROOTS = roots
+
+
+def _safe_path(candidate: str, *, must_exist: bool = False) -> Path:
+    """Resolve `candidate` and confirm it sits inside an allowed root.
+
+    Resolution happens before the check so that '..' segments and symlinks
+    cannot be used to step outside after the fact.
+    """
+    if not candidate or not str(candidate).strip():
+        raise PathNotAllowed("Empty path")
+
+    resolved = Path(candidate).expanduser().resolve()
+
+    if not any(
+        resolved == root or root in resolved.parents for root in _ALLOWED_ROOTS
+    ):
+        allowed = ", ".join(str(r) for r in _ALLOWED_ROOTS)
+        raise PathNotAllowed(
+            f"{resolved} is outside the allowed directories ({allowed})"
+        )
+    if must_exist and not resolved.exists():
+        raise PathNotAllowed(f"{resolved} does not exist")
+    return resolved
+
+
+def _parse_plan(raw: str) -> dict:
+    """Pull a plan object out of whatever the model actually returned.
+
+    Handles bare JSON, fenced blocks, and JSON with commentary on either
+    side. Raises ValueError if nothing usable is in there.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("empty response")
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = json.loads(_first_json_object(text))
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+    if not isinstance(parsed.get("steps", []), list):
+        raise ValueError("'steps' is not a list")
+    return parsed
+
+
+def _first_json_object(text: str) -> str:
+    """Return the first balanced {...} span, ignoring braces inside strings."""
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in response")
+
+    depth, in_string, escaped = 0, False, False
+    for i, ch in enumerate(text[start:], start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    raise ValueError("unterminated JSON object in response")
+
+
+def _sanitize_filename(name: str, fallback: str = "document") -> str:
+    """Reduce a model-supplied string to something safe as a filename."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "")).strip("._-")
+    return (cleaned or fallback)[:80]
+
+
+def _safe_child(base: str, name: str) -> Path:
+    """Join an LLM-supplied name onto a base directory without escaping it."""
+    if not name or os.path.isabs(str(name)) or ".." in Path(str(name)).parts:
+        raise PathNotAllowed(f"Unsafe path component: {name!r}")
+    return _safe_path(str(Path(base) / str(name)))
+
+
 def execute_tool(tool: str, params: dict) -> Any:
     """Dispatch a tool call to its implementation."""
     handlers = {
@@ -155,37 +284,39 @@ def execute_tool(tool: str, params: dict) -> Any:
         return f"Tool error: {e}"
 
 def _create_document(matter_id: str, doc_type: str, content: str, title: str = "") -> str:
-    matter_path = Path(MATTERS_DIR) / matter_id
+    matter_path = _safe_child(MATTERS_DIR, matter_id)
     matter_path.mkdir(parents=True, exist_ok=True)
-    filename = f"{doc_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    if title:
-        filename = f"{title.replace(' ', '_')}_{filename}"
-    filepath = matter_path / filename
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # doc_type and title come from the model; keep them from steering the
+    # write anywhere other than this matter's directory.
+    filename = _sanitize_filename(f"{title}_{doc_type}" if title else doc_type)
+    filepath = matter_path / f"{filename}_{stamp}.md"
     with open(filepath, "w") as f:
         f.write(f"# {title or doc_type}\n\n{content}")
     return f"Created: {filepath}"
 
 def _move_file_internal(source: str, destination: str) -> str:
-    src = Path(source)
-    dst = Path(destination)
+    src = _safe_path(source, must_exist=True)
+    dst = _safe_path(destination)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
-    return f"Moved: {source} → {destination}"
+    return f"Moved: {src} → {dst}"
 
 def _tag_document(file_path: str, tags: list) -> str:
-    meta_path = Path(file_path).with_suffix(".tags.json")
+    target = _safe_path(file_path, must_exist=True)
+    meta_path = target.with_suffix(".tags.json")
     existing = []
     if meta_path.exists():
         with open(meta_path) as f:
             existing = json.load(f).get("tags", [])
-    all_tags = list(set(existing + tags))
+    all_tags = list(set(existing + list(tags)))
     with open(meta_path, "w") as f:
-        json.dump({"file": file_path, "tags": all_tags}, f)
-    return f"Tagged {file_path}: {all_tags}"
+        json.dump({"file": str(target), "tags": all_tags}, f)
+    return f"Tagged {target}: {all_tags}"
 
 def _summarize_document(file_path: str) -> str:
     try:
-        with open(file_path) as f:
+        with open(_safe_path(file_path, must_exist=True)) as f:
             content = f.read()[:3000]
         import ollama
         resp = ollama.chat(
@@ -202,7 +333,7 @@ def _summarize_document(file_path: str) -> str:
 
 def _extract_dates(file_path: str) -> str:
     try:
-        with open(file_path) as f:
+        with open(_safe_path(file_path, must_exist=True)) as f:
             content = f.read()[:3000]
         import ollama
         resp = ollama.chat(
@@ -221,7 +352,7 @@ def _extract_dates(file_path: str) -> str:
         return f"Could not extract dates: {e}"
 
 def _log_time_entry(matter_id: str, hours: float, description: str) -> str:
-    log_path = Path(MATTERS_DIR) / matter_id / "time_log.json"
+    log_path = _safe_child(MATTERS_DIR, matter_id) / "time_log.json"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     entries = []
     if log_path.exists():
@@ -377,21 +508,42 @@ Context from vault:
 
 Attorney request: {query}"""
 
-    try:
-        resp = ollama.chat(
-            model=slm,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            options={"temperature": 0.2},
-        )
-        raw = resp["message"]["content"].strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.split("\n")[1:-1])
-        plan = json.loads(raw)
-    except Exception as e:
-        return {"error": f"LAM planning failed: {e}", "steps": []}
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ]
+
+    plan, last_error, raw = None, None, ""
+    # Small local models routinely wrap JSON in prose or add a trailing
+    # note, which a bare json.loads rejects outright. Ask for JSON mode,
+    # parse tolerantly, and give the model one corrective retry.
+    for attempt in range(2):
+        try:
+            resp = ollama.chat(
+                model=slm,
+                messages=messages,
+                options={"temperature": 0.2},
+                format="json",
+            )
+            raw = resp["message"]["content"]
+            plan = _parse_plan(raw)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt == 0:
+                messages = messages + [
+                    {"role": "assistant", "content": raw or ""},
+                    {"role": "user", "content":
+                        "That was not valid JSON. Reply with the JSON object "
+                        "only — no prose, no code fences."},
+                ]
+
+    if plan is None:
+        return {
+            "error": f"LAM planning failed: {last_error}",
+            "raw_response": (raw or "")[:500],
+            "steps": [],
+        }
 
     auto_results = []
     staged_ids = []

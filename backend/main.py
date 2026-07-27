@@ -103,7 +103,7 @@ from contact_intel import (
 )
 from lam import (
     run_lam_agent, load_staged, approve_staged_action,
-    reject_staged_action, AUDIT_DIR
+    reject_staged_action, AUDIT_DIR, set_allowed_roots as _lam_set_allowed_roots
 )
 
 # Optional Pillow for EXIF
@@ -467,9 +467,13 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(polling_loop())
     # Start any saved folder watchers
     cfg = load_config()
-    for folder in cfg.get(WATCH_FOLDERS_KEY, []):
+    watch_folders = cfg.get(WATCH_FOLDERS_KEY, [])
+    for folder in watch_folders:
         if os.path.isdir(folder):
             start_folder_watcher(folder)
+    # The agent's file tools may only touch folders the user explicitly
+    # asked VaultMind to index, plus its own matters directory.
+    _lam_set_allowed_roots(watch_folders)
     yield
     task.cancel()
     try:
