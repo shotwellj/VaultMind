@@ -88,6 +88,7 @@ from lam import (
     run_lam_agent, load_staged, approve_staged_action,
     reject_staged_action, AUDIT_DIR, set_allowed_roots as _lam_set_allowed_roots
 )
+import agent_loop
 
 # Optional Pillow for EXIF
 try:
@@ -737,15 +738,90 @@ async def list_staged():
 class ActionDecision(BaseModel):
     action_id: str
 
+def _run_id_for_staged(action_id: str) -> str:
+    """A staged action created by the agent loop carries its run's id.
+
+    Approving such an action must resume the run — executing it through the
+    legacy fire-and-forget path would leave the run paused forever and the
+    model never learning the outcome.
+    """
+    for action in load_staged():
+        if action["id"] == action_id:
+            return action.get("run_id", "")
+    return ""
+
 @app.post("/staged-actions/{action_id}/approve")
 async def approve_action(action_id: str):
+    run_id = _run_id_for_staged(action_id)
+    if run_id:
+        run = await asyncio.to_thread(agent_loop.resume_run, run_id, True)
+        if "error" in run and "id" not in run:
+            return run
+        return {"approved": True, "run": agent_loop.run_summary(run)}
     result = await asyncio.to_thread(approve_staged_action, action_id)
     return result
 
 @app.post("/staged-actions/{action_id}/reject")
 async def reject_action(action_id: str):
+    run_id = _run_id_for_staged(action_id)
+    if run_id:
+        run = await asyncio.to_thread(agent_loop.resume_run, run_id, False)
+        if "error" in run and "id" not in run:
+            return run
+        return {"rejected": True, "run": agent_loop.run_summary(run)}
     result = await asyncio.to_thread(reject_staged_action, action_id)
     return result
+
+
+# ── Agent Loop Endpoints (the harness) ────────────────────────
+
+class RunRequest(BaseModel):
+    goal:      str
+    matter_id: str = ""
+    model:     str = ""
+    max_steps: int = agent_loop.DEFAULT_MAX_STEPS
+
+@app.post("/agent/run")
+async def start_agent_run(req: RunRequest):
+    """Start an observe-act agent run.
+
+    Unlike /lam/agent (one-shot plan), this loops: the model calls tools,
+    sees each result, and reacts. Returns when the run finishes, errors,
+    or pauses on a STAGED tool awaiting approval.
+    """
+    try:
+        run = await asyncio.to_thread(
+            agent_loop.start_run,
+            req.goal, req.matter_id, req.model or None, req.max_steps,
+        )
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+    return agent_loop.run_summary(run)
+
+@app.get("/agent/runs")
+async def list_agent_runs(limit: int = Query(default=50)):
+    return {"runs": agent_loop.list_runs(limit)}
+
+@app.get("/agent/runs/{run_id}")
+async def get_agent_run(run_id: str):
+    run = agent_loop.load_run(run_id)
+    if run is None:
+        return JSONResponse(status_code=404, content={"error": f"Run not found: {run_id}"})
+    return run
+
+@app.post("/agent/runs/{run_id}/approve")
+async def approve_agent_run(run_id: str):
+    run = await asyncio.to_thread(agent_loop.resume_run, run_id, True)
+    if "error" in run and "id" not in run:
+        return JSONResponse(status_code=409, content=run)
+    return agent_loop.run_summary(run)
+
+@app.post("/agent/runs/{run_id}/reject")
+async def reject_agent_run(run_id: str):
+    run = await asyncio.to_thread(agent_loop.resume_run, run_id, False)
+    if "error" in run and "id" not in run:
+        return JSONResponse(status_code=409, content=run)
+    return agent_loop.run_summary(run)
 
 @app.get("/audit-log")
 async def get_audit_log(limit: int = Query(default=50)):
@@ -3084,8 +3160,11 @@ async def chat(msg: ChatMessage):
                     yield line
                 return
             # Partial answer already sent — tell the user it was cut short
-            # rather than letting it look complete.
-            yield f"data: {json.dumps({'token': f'\n\n[Response interrupted: {e}]'})}\n\n"
+            # rather than letting it look complete. (Built outside the
+            # f-string: Python 3.11, which CI runs, rejects backslashes
+            # inside f-string expressions.)
+            interrupted = "\n\n[Response interrupted: " + str(e) + "]"
+            yield f"data: {json.dumps({'token': interrupted})}\n\n"
             yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
             return
 
@@ -3590,6 +3669,94 @@ def smart_scrape(url: str, max_chars: int = 3000) -> str:
         return soup.get_text(separator="\n", strip=True)[:max_chars]
     except Exception:
         return ""
+
+
+# ── Agent loop tools ───────────────────────────────────────────
+# Registered here, after the functions they wrap, so the loop's retrieval
+# tools reuse the exact same guarded paths as chat: relevance thresholds
+# for the vault, the egress log + SSRF guard for anything network-bound.
+
+def _tool_vault_search(query: str, limit: int = 5) -> str:
+    """Loop tool: search the local vault. Content stays on-machine."""
+    query = (query or "").strip()
+    if not query:
+        return "vault_search error: empty query."
+    limit = max(1, min(int(limit or 5), 10))
+    col = get_collection()
+    try:
+        embedding = ollama.embeddings(model=EMBED_MODEL, prompt=query)["embedding"]
+    except Exception as e:
+        return f"vault_search error: could not embed query ({e})."
+    hits = col.query(
+        query_embeddings=[embedding],
+        n_results=limit,
+        include=["documents", "metadatas", "distances"],
+    )
+    if not hits["documents"] or not hits["documents"][0]:
+        return f"No passages found in the vault for {query!r}."
+    threshold = relevance_threshold(col.count())
+    lines = []
+    for doc, meta, dist in zip(hits["documents"][0], hits["metadatas"][0],
+                               hits["distances"][0]):
+        if dist >= threshold:
+            continue
+        lines.append(f"[{meta.get('source', 'unknown')}] {doc[:800]}")
+    if not lines:
+        return f"No sufficiently relevant passages in the vault for {query!r}."
+    return "\n\n".join(lines)
+
+
+def _tool_web_search(query: str, max_results: int = 6) -> str:
+    """Loop tool: DuckDuckGo search via the existing egress-declared path."""
+    hits = web_search((query or "").strip(), max_results=max(1, min(int(max_results or 6), 10)))
+    if not hits:
+        return "No web results."
+    return "\n\n".join(
+        f"{h.get('title', '')}\n{h.get('href', '')}\n{h.get('body', '')[:300]}"
+        for h in hits
+    )
+
+
+def _tool_fetch_url(url: str, max_chars: int = 3000) -> str:
+    """Loop tool: fetch one page through the SSRF-guarded scraper."""
+    text = smart_scrape(url, max_chars=max(500, min(int(max_chars or 3000), 8000)))
+    return text or f"Could not fetch {url!r} (blocked, non-HTML, or unreachable)."
+
+
+agent_loop.register_tool(agent_loop.Tool(
+    name="vault_search",
+    description=("Search the user's private local document vault. Use this "
+                 "first for anything about the user's own documents, notes, "
+                 "email, or records."),
+    parameters={"type": "object", "properties": {
+        "query": {"type": "string", "description": "Natural-language question or topic."},
+        "limit": {"type": "integer", "description": "Max passages (1-10, default 5)."},
+    }, "required": ["query"]},
+    risk="auto",
+    handler=_tool_vault_search,
+))
+agent_loop.register_tool(agent_loop.Tool(
+    name="web_search",
+    description=("Search the live web (DuckDuckGo). The query text leaves "
+                 "the machine — use only when the vault cannot answer."),
+    parameters={"type": "object", "properties": {
+        "query": {"type": "string", "description": "Search query."},
+        "max_results": {"type": "integer", "description": "Max results (1-10, default 6)."},
+    }, "required": ["query"]},
+    risk="auto",
+    handler=_tool_web_search,
+))
+agent_loop.register_tool(agent_loop.Tool(
+    name="fetch_url",
+    description="Fetch and read one web page found via web_search.",
+    parameters={"type": "object", "properties": {
+        "url": {"type": "string", "description": "URL to fetch."},
+        "max_chars": {"type": "integer", "description": "Max characters to return (default 3000)."},
+    }, "required": ["url"]},
+    risk="auto",
+    handler=_tool_fetch_url,
+))
+
 
 @app.post("/agent")
 async def agent(msg: ChatMessage):
