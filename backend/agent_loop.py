@@ -121,6 +121,10 @@ def register_tool(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
+def unregister_tool(name: str) -> None:
+    TOOLS.pop(name, None)
+
+
 def _ollama_tools() -> list[dict]:
     return [
         {

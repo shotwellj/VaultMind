@@ -89,6 +89,7 @@ from lam import (
     reject_staged_action, AUDIT_DIR, set_allowed_roots as _lam_set_allowed_roots
 )
 import agent_loop
+import mcp_client
 
 # Optional Pillow for EXIF
 try:
@@ -461,7 +462,15 @@ async def lifespan(app: FastAPI):
     # The agent's file tools may only touch folders the user explicitly
     # asked VaultMind to index, plus its own matters directory.
     _lam_set_allowed_roots(watch_folders)
+    # Connect configured external MCP servers in the background — a slow
+    # or broken server (npx fetching a package, say) must not block boot.
+    threading.Thread(
+        target=mcp_client.manager.connect_all,
+        daemon=True,
+        name="vaultmind-mcp-connect",
+    ).start()
     yield
+    mcp_client.manager.shutdown()
     task.cancel()
     try:
         await task
@@ -822,6 +831,50 @@ async def reject_agent_run(run_id: str):
     if "error" in run and "id" not in run:
         return JSONResponse(status_code=409, content=run)
     return agent_loop.run_summary(run)
+
+
+# ── External MCP servers (harness Phase 2) ────────────────────
+
+class McpServerSpec(BaseModel):
+    name:       str
+    command:    str
+    args:       list[str] = []
+    env:        dict[str, str] = {}
+    enabled:    bool = True
+    # Explicit opt-in: tools named here run without approval. Everything
+    # else from an external server is STAGED.
+    auto_tools: list[str] = []
+
+@app.get("/agent/mcp")
+async def mcp_status():
+    """Configured external MCP servers, their connection state and tools."""
+    return mcp_client.manager.status()
+
+@app.post("/agent/mcp/servers")
+async def upsert_mcp_server(spec: McpServerSpec):
+    try:
+        normalized = mcp_client.upsert_server(spec.name, spec.model_dump())
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+    if normalized["enabled"]:
+        try:
+            await asyncio.to_thread(mcp_client.manager.connect, spec.name, normalized)
+        except Exception as e:
+            return {"saved": True, "connected": False, "error": str(e)}
+    else:
+        await asyncio.to_thread(mcp_client.manager.disconnect, spec.name)
+    return {"saved": True,
+            "connected": spec.name in mcp_client.manager.sessions,
+            "tools": mcp_client.manager.server_tools.get(spec.name, [])}
+
+@app.delete("/agent/mcp/servers/{name}")
+async def delete_mcp_server(name: str):
+    await asyncio.to_thread(mcp_client.manager.disconnect, name)
+    existed = mcp_client.remove_server(name)
+    if not existed:
+        return JSONResponse(status_code=404,
+                            content={"error": f"No MCP server named {name!r}."})
+    return {"deleted": name}
 
 @app.get("/audit-log")
 async def get_audit_log(limit: int = Query(default=50)):
