@@ -261,6 +261,27 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
 .feed-empty .big{font-size:40px}.feed-empty p{font-size:13px;color:var(--text5);line-height:1.7}
 
 /* ── Modals ── */
+/* ── Agent runs ── */
+.run-log{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:10px}
+.run-evt{font-size:13px;line-height:1.55;color:var(--text2);border-left:2px solid var(--border);padding:6px 12px;border-radius:0 8px 8px 0;background:var(--bg2)}
+.run-evt .run-tag{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text4);display:block;margin-bottom:2px}
+.run-evt.thinking{border-left-color:var(--accent)}
+.run-evt.tool{border-left-color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow-y:auto}
+.run-evt.answer{border-left-color:#9ece6a;color:var(--text1);font-size:14px}
+.run-evt.errored{border-left-color:#f7768e}
+.run-evt.approval{border-left-color:#e0af68;background:rgba(224,175,104,.08)}
+.run-approve-row{display:flex;gap:8px;margin-top:8px}
+.run-approve-row button{padding:6px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:12px;font-weight:600;background:var(--bg3);color:var(--text1)}
+.run-approve-row .yes{border-color:#9ece6a;color:#9ece6a}
+.run-approve-row .no{border-color:#f7768e;color:#f7768e}
+.run-approve-row button:disabled{opacity:.4;cursor:default}
+.run-history{flex-shrink:0;max-height:120px;overflow-y:auto;border-top:1px solid var(--border);padding:8px 22px;display:flex;flex-direction:column;gap:4px}
+.run-hist-item{font-size:12px;color:var(--text3);display:flex;gap:8px;align-items:center;cursor:pointer;padding:3px 6px;border-radius:6px}
+.run-hist-item:hover{background:var(--bg2)}
+.run-badge{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:99px;border:1px solid var(--border);color:var(--text4)}
+.run-badge.paused{color:#e0af68;border-color:#e0af68}
+.run-badge.done{color:#9ece6a;border-color:#9ece6a}
+.run-badge.error{color:#f7768e;border-color:#f7768e}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px}
 .modal-overlay.hidden{display:none}
 .modal{background:var(--bg3);border:1px solid var(--border);border-radius:18px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow)}
@@ -424,6 +445,7 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
     <div class="tab-bar">
       <button class="tab-btn active" id="tab-chat" onclick="switchTab('chat')">💬 Chat</button>
       <button class="tab-btn" id="tab-feed" onclick="switchTab('feed')">📡 Feed</button>
+      <button class="tab-btn" id="tab-runs" onclick="switchTab('runs')">🤖 Runs</button>
     </div>
 
     <!-- Chat panel -->
@@ -466,6 +488,22 @@ header{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;alig
         <div id="feed-items">
           <div class="feed-empty"><div class="big">📡</div><p>No documents indexed yet.<br>Drop files in the sidebar to get started.</p></div>
         </div>
+      </div>
+    </div>
+
+    <!-- Agent runs panel -->
+    <div id="panel-runs" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+      <div class="run-log" id="run-log">
+        <div class="empty-state" id="run-empty">
+          <div class="big">🤖</div>
+          <div class="empty-title">Agent runs</div>
+          <div class="empty-sub">Give the agent a goal. It works step by step — searching your vault, the web, and any connected tools — and pauses for your approval before anything risky.</div>
+        </div>
+      </div>
+      <div class="run-history" id="run-history"></div>
+      <div class="bar">
+        <textarea id="run-goal" placeholder="Goal — e.g. find the payment terms in my lease and draft a summary…" rows="1"></textarea>
+        <button class="bar-send" id="run-start" title="Start run">➤</button>
       </div>
     </div>
   </div>
@@ -703,8 +741,130 @@ applyTheme(localStorage.getItem('vm-theme') || 'dark');
 function switchTab(t) {
   document.getElementById('panel-chat').style.display = t==='chat' ? 'flex' : 'none';
   document.getElementById('panel-feed').style.display = t==='feed' ? 'flex' : 'none';
+  document.getElementById('panel-runs').style.display = t==='runs' ? 'flex' : 'none';
   document.getElementById('tab-chat').className = 'tab-btn'+(t==='chat'?' active':'');
   document.getElementById('tab-feed').className = 'tab-btn'+(t==='feed'?' active':'');
+  document.getElementById('tab-runs').className = 'tab-btn'+(t==='runs'?' active':'');
+  if(t==='runs') loadRunHistory();
+}
+
+// ── Agent runs ─────────────────────────────────────────────────
+const runLogEl = document.getElementById('run-log');
+const runGoalEl = document.getElementById('run-goal');
+let runInFlight = false;
+
+function runEvt(cls, tag, text) {
+  document.getElementById('run-empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'run-evt ' + cls;
+  const tagEl = document.createElement('span');
+  tagEl.className = 'run-tag'; tagEl.textContent = tag;
+  el.appendChild(tagEl);
+  el.appendChild(document.createTextNode(text));
+  runLogEl.appendChild(el);
+  runLogEl.scrollTop = runLogEl.scrollHeight;
+  return el;
+}
+
+async function streamRunEvents(url, body) {
+  runInFlight = true;
+  document.getElementById('run-start').disabled = true;
+  try {
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    if (!res.ok) { runEvt('errored','error',`Request failed (${res.status})`); return; }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf='';
+    while (true) {
+      const {done, value} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const lines = buf.split('\n'); buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try { renderRunEvent(JSON.parse(line.slice(6))); } catch(e) {}
+      }
+    }
+  } catch(e) {
+    runEvt('errored','error','Stream failed: ' + e.message);
+  } finally {
+    runInFlight = false;
+    document.getElementById('run-start').disabled = false;
+    loadRunHistory();
+  }
+}
+
+function renderRunEvent(evt) {
+  if (evt.event === 'started') {
+    runEvt('thinking','run', evt.run.goal);
+  } else if (evt.event === 'step') {
+    const calls = (evt.tool_calls||[]).map(c=>c.function.name).join(', ');
+    if (calls) runEvt('thinking',`step ${evt.step}`, (evt.content? evt.content+' — ':'') + 'calling: ' + calls);
+    else if (evt.content) runEvt('thinking',`step ${evt.step}`, evt.content);
+  } else if (evt.event === 'tool_result') {
+    runEvt('tool', evt.tool, evt.result);
+  } else if (evt.event === 'paused') {
+    renderApproval(evt.run.id, evt.pending_action);
+  } else if (evt.event === 'resumed') {
+    runEvt('thinking','resumed', evt.approved ? `Approved: ${evt.tool}` : `Rejected: ${evt.tool}`);
+  } else if (evt.event === 'done') {
+    const r = evt.run;
+    let note = r.answer || '(no answer)';
+    if (r.hit_step_limit) note += ' [stopped: step limit]';
+    if (r.hit_time_limit) note += ' [stopped: time budget]';
+    runEvt('answer','answer', note);
+  } else if (evt.event === 'error') {
+    runEvt('errored','error', evt.error || 'Unknown error');
+  }
+}
+
+function renderApproval(runId, pending) {
+  const el = runEvt('approval','needs your approval',
+    `${pending.tool}  ·  ${JSON.stringify(pending.params, null, 1)}`);
+  const row = document.createElement('div');
+  row.className = 'run-approve-row';
+  const yes = document.createElement('button'); yes.className='yes'; yes.textContent='✓ Approve & continue';
+  const no  = document.createElement('button'); no.className='no';  no.textContent='✕ Reject';
+  const decide = (approved) => {
+    yes.disabled = no.disabled = true;
+    streamRunEvents(`${API}/agent/runs/${runId}/resume/stream`, {approved});
+  };
+  yes.onclick = () => decide(true);
+  no.onclick  = () => decide(false);
+  row.appendChild(yes); row.appendChild(no);
+  el.appendChild(row);
+}
+
+function startAgentRun() {
+  const goal = runGoalEl.value.trim();
+  if (!goal || runInFlight) return;
+  runGoalEl.value = '';
+  streamRunEvents(`${API}/agent/run/stream`, {goal, model: currentModel || ''});
+}
+
+document.getElementById('run-start').onclick = startAgentRun;
+runGoalEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); startAgentRun(); }
+});
+
+async function loadRunHistory() {
+  try {
+    const data = await fetch(`${API}/agent/runs?limit=8`).then(r=>r.json());
+    const host = document.getElementById('run-history');
+    host.innerHTML = '';
+    for (const r of (data.runs||[])) {
+      const item = document.createElement('div');
+      item.className = 'run-hist-item';
+      const badge = document.createElement('span');
+      badge.className = 'run-badge ' + (r.status==='paused'?'paused':r.status==='error'?'error':r.status==='done'?'done':'');
+      badge.textContent = r.status;
+      const label = document.createElement('span');
+      label.textContent = r.goal.slice(0, 90);
+      item.appendChild(badge); item.appendChild(label);
+      if (r.status === 'paused' && r.pending_action) {
+        item.title = 'Click to review the pending action';
+        item.onclick = () => renderApproval(r.id, r.pending_action);
+      }
+      host.appendChild(item);
+    }
+  } catch(e) { console.log('Run history error:', e); }
 }
 
 // ── Sidebar toggle ─────────────────────────────────────────────

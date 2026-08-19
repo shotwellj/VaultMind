@@ -785,10 +785,11 @@ async def reject_action(action_id: str):
 # ── Agent Loop Endpoints (the harness) ────────────────────────
 
 class RunRequest(BaseModel):
-    goal:      str
-    matter_id: str = ""
-    model:     str = ""
-    max_steps: int = agent_loop.DEFAULT_MAX_STEPS
+    goal:        str
+    matter_id:   str = ""
+    model:       str = ""
+    max_steps:   int = agent_loop.DEFAULT_MAX_STEPS
+    max_seconds: int = agent_loop.DEFAULT_MAX_SECONDS
 
 @app.post("/agent/run")
 async def start_agent_run(req: RunRequest):
@@ -802,10 +803,62 @@ async def start_agent_run(req: RunRequest):
         run = await asyncio.to_thread(
             agent_loop.start_run,
             req.goal, req.matter_id, req.model or None, req.max_steps,
+            req.max_seconds,
         )
     except ValueError as e:
         return JSONResponse(status_code=422, content={"error": str(e)})
     return agent_loop.run_summary(run)
+
+def _stream_run_events(work_fn) -> StreamingResponse:
+    """Bridge a synchronous agent run into an SSE response.
+
+    The run executes on a worker thread and pushes progress events into a
+    queue; the async generator drains it. One event per SSE `data:` line,
+    ending with either a `done`, `paused`, or `error` event.
+    """
+    import queue as _queue
+    q: "_queue.Queue" = _queue.Queue()
+
+    def work():
+        try:
+            result = work_fn(lambda evt: q.put(evt))
+            # resume_run reports bad state as a dict, not an exception
+            if isinstance(result, dict) and "error" in result and "id" not in result:
+                q.put({"event": "error", "error": result["error"]})
+        except Exception as e:
+            q.put({"event": "error", "error": str(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True, name="vaultmind-agent-run").start()
+
+    async def generate():
+        while True:
+            evt = await asyncio.to_thread(q.get)
+            if evt is None:
+                break
+            yield f"data: {json.dumps(evt)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
+
+@app.post("/agent/run/stream")
+async def start_agent_run_stream(req: RunRequest):
+    """Like /agent/run, but streams progress events as they happen."""
+    return _stream_run_events(lambda on_event: agent_loop.start_run(
+        req.goal, req.matter_id, req.model or None, req.max_steps,
+        req.max_seconds, on_event=on_event,
+    ))
+
+class ResumeRequest(BaseModel):
+    approved: bool = True
+
+@app.post("/agent/runs/{run_id}/resume/stream")
+async def resume_agent_run_stream(run_id: str, req: ResumeRequest):
+    """Approve or reject a paused run's pending action, streaming progress."""
+    return _stream_run_events(lambda on_event: agent_loop.resume_run(
+        run_id, req.approved, on_event=on_event,
+    ))
 
 @app.get("/agent/runs")
 async def list_agent_runs(limit: int = Query(default=50)):
