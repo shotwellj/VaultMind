@@ -32,6 +32,11 @@ pdf2image>=1.17,<2.0
 # returned empty results.
 networkx>=3.2,<4.0
 
+# MCP client (agent harness Phase 2): lets the agent loop consume external
+# MCP servers, staged-by-default. Same bound as mcp/pyproject.toml.
+# mcp_client.py degrades gracefully if this is missing.
+mcp>=1.2,<2.0
+
 # ── Optional ───────────────────────────────────────────────────
 # Not installed by default. Each changes behaviour when present.
 #

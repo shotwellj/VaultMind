@@ -194,6 +194,9 @@ Every endpoint requires a token, generated on first run and stored in `backend/.
 - [x] Agent mode — vault + live web search
 - [x] Inbox digest — AI-ranked email summary
 - [x] 6 local model choices
+- [x] Agent runs — multi-step tool loop with approval gates (`POST /agent/run`)
+- [x] Live run streaming — watch each step in the 🤖 Runs tab, approve or reject inline
+- [x] External MCP servers — plug any MCP tool into the agent loop, staged by default (`/agent/mcp`)
 - [x] Electron Mac app
 - [x] Docker support
 - [x] Mobile-responsive PWA
